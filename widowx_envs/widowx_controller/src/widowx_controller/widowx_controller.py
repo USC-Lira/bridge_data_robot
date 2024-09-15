@@ -14,6 +14,10 @@ import time
 import tf2_ros
 from transformations import quaternion_from_matrix
 
+import sys
+
+
+
 from interbotix_xs_modules.arm import InterbotixArmXSInterface, InterbotixArmXSInterface, \
     InterbotixRobotXSCore, InterbotixGripperXSInterface
 
@@ -255,8 +259,8 @@ class WidowX_Controller(RobotControllerBase):
             if not success:
                 print('no IK solution found, do nothing')
                 # self.open_gripper()
-                # self.move_to_neutral()
-                # raise Environment_Exception
+                self.move_to_neutral()
+                raise Environment_Exception
 
             if check_effort:
                 if np.max(np.abs(self.get_joint_effort()) - ABS_MAX_JOINT_EFFORTS) > 10:

@@ -317,7 +317,7 @@ class BlockingLoop(Configurable):
                 video_func = npy_to_mp4
             else:
                 raise NotImplementedError
-            video_func(cam_images, self.traj_log_dir + '/video_cam{}'.format(n)) # todo make extra folders for each run?
+            video_func(cam_images, self.traj_log_dir + '/video_cam{}'.format(n), fps=10) # todo make extra folders for each run?
 
     def _init(self):
         """

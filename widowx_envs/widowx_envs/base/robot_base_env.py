@@ -11,11 +11,11 @@ from widowx_envs.utils import AttrDict
 
 # Rospkg lib
 import rospy
+
+# Now you can import the modules
 from multicam_server.topic_utils import IMTopic
 from multicam_server.camera_recorder import CameraRecorder
-from widowx_controller.widowx_controller import WidowX_Controller
-from widowx_controller.widowx_controller import publish_transform
-
+from widowx_controller.widowx_controller import WidowX_Controller, publish_transform
 import logging
 import json
 from gym import spaces
@@ -261,7 +261,7 @@ class RobotBaseEnv(BaseEnv):
         if self._hp.adaptive_wait:
             t1 = time.time()
             self.adaptive_wait(tstamp_return_obs - self.time_for_get_obs * 1.1)
-            # print('adaptive wait for ', time.time() - t1)
+            print('adaptive wait for ', time.time() - t1)
         obs = self.current_obs()
         return obs
 

@@ -20,6 +20,8 @@ from sensor_msgs.msg import Image
 from multicam_server.topic_utils import IMTopic
 from widowx_controller.widowx_controller import WidowX_Controller
 
+import cv2
+
 ##############################################################################
 
 class WidowXEnv(RobotBaseEnv):
@@ -411,6 +413,7 @@ class ImageReachingWidowX(StateReachingWidowX):
             obs['full_image'] = image
         # obs['gripper'] = full_obs['state'][-1]  # this dimension is not being updated for now
         return obs
+
 
 
 ##############################################################################

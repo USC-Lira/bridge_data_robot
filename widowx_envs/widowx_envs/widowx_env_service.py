@@ -12,9 +12,11 @@ from typing import Optional, Tuple, Any
 from widowx_envs.utils.exceptions import Environment_Exception
 
 # install from: https://github.com/youliangtan/edgeml
+import edgeml
+print(edgeml.__file__)
+
 from edgeml.action import ActionClient, ActionServer, ActionConfig
 from edgeml.internal.utils import mat_to_jpeg, jpeg_to_mat, compute_hash
-
 ##############################################################################
 
 
@@ -26,7 +28,7 @@ class WidowXConfigs:
         "move_to_rand_start_freq": 1,
         "override_workspace_boundaries": [
             [0.1, -0.15, -0.1, -1.57, 0],
-            [0.45, 0.25, 0.18, 1.57, 0],
+            [0.45, 0.25, 0.25, 1.57, 0],
         ],
         "action_clipping": "xyz",
         "catch_environment_except": False,
@@ -177,7 +179,7 @@ class WidowXActionServer():
             obs = {
                 "image": obs["image"],
                 "state": obs["state"],
-                "full_image": mat_to_jpeg(obs["full_image"][0])  # faster
+                "full_image": mat_to_jpeg(obs["full_image"][0]) # faster
             }
         else:
             # use dummy img with random noise

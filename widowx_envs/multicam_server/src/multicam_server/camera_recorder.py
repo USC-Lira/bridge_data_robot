@@ -248,7 +248,7 @@ if __name__ == '__main__':
         im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
 
         t1 = rospy.get_time()
-        cv2.imwrite(os.environ['EXP'] + '/test_image_t{}_{}.jpg'.format(t, rospy.get_time() - start_time), im)
+        cv2.imwrite(os.environ['EXP'] + '/test_image_t{}_{}.jpg'.format(t, rclpy.get_time() - start_time), im)
         # print('save took ', rospy.get_time() - t1)
 
         r.sleep()

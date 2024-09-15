@@ -94,7 +94,8 @@ def main():
         elif key == ord(' '):
             is_open = 1 - is_open
             print("Gripper is now: ", is_open)
-            client.step_action(np.array([0, 0, 0, 0, 0, 0, is_open]))
+            client.move_gripper(state=is_open)
+            # client.step_action(np.array([0, 0, 0, 0, 0, 0, is_open]))
         elif key == ord('r'):
             print("Resetting robot...")
             client.reset()

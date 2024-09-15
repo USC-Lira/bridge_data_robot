@@ -11,9 +11,9 @@ while IFS= read -r line; do
     # Check for the device identifiers and store them accordingly
     if [[ $line == *"Piwebcam: UVC Camera"* ]]; then
         wrist=$(echo "$line" | awk -F '(' '{print $2}' | awk -F ')' '{print $1}')
-    elif [[ $line == *"HD Pro Webcam C920"* ]] && [ -z "$blue" ]; then
+    elif [[ $line == *"1080P Pro Stream"* ]] && [ -z "$blue" ]; then
         blue=$(echo "$line" | awk -F '(' '{print $2}' | awk -F ')' '{print $1}')
-    elif [[ $line == *"HD Pro Webcam C920"* ]]; then
+    elif [[ $line == *"1080P Pro Stream"* ]]; then
         yellow=$(echo "$line" | awk -F '(' '{print $2}' | awk -F ')' '{print $1}')
     elif [[ $line == *"Intel(R) RealSense(TM) Depth Ca"* ]]; then
         d435=$(echo "$line" | awk -F 'Ca ' '{print $2}' | awk -F ')' '{print $1}')
