@@ -267,10 +267,10 @@ class WidowX_Controller(RobotControllerBase):
                     print('violation ', np.abs(self.get_joint_effort()) - ABS_MAX_JOINT_EFFORTS)
                     print('motor number: ', np.argmax(np.abs(self.get_joint_effort()) - ABS_MAX_JOINT_EFFORTS))
                     print('max effort reached: ', self.get_joint_effort())
-                    print('max effort allowed ', ABS_MAX_JOINT_EFFORTS)
-                    self.open_gripper()
-                    self.move_to_neutral()
-                    raise Environment_Exception
+                    print('max effort allowed ', max_effort_abs_values)
+                    # self.open_gripper()
+                    # self.move_to_neutral()
+                    # raise Environment_Exception
 
         except rospy.service.ServiceException:
             print('stuck during move')

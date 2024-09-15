@@ -225,6 +225,8 @@ class WidowXActionServer():
         # self.bridge_env.controller().move_to_neutral(duration=1.0)
         # self.bridge_env.controller().open_gripper()
         self.bridge_env.reset()
+        obs = self.bridge_env.current_obs()
+        print("JOINTS: ", obs["joints"])
         self.bridge_env.start()
         return WidowXStatus.SUCCESS
 
