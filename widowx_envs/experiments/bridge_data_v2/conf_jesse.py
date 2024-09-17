@@ -11,7 +11,8 @@ from widowx_envs.policies.vr_teleop_policy import VRTeleopPolicy
 from widowx_envs.policies.policy import NullPolicy
 
 env_params = {
-    'camera_topics': [IMTopic('/blue/image_raw'),
+        'camera_topics': [IMTopic('/yellow/image_raw'),
+                      IMTopic('/blue/image_raw'),
                       ],
     # 'depth_camera_topics': [IMTopic('/D435/depth/image_rect_raw', dtype='16UC1')],
     'gripper_attached': 'custom',
