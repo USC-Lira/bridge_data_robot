@@ -3,9 +3,9 @@
     <arg name="video_stream_provider" default="0" />
     <arg name="camera_connector_chart" default="" />
     <arg name="python_node" default="false" />
-    <arg name="realsense" default="false" />
-    <arg name="serial_no_camera1"             default="913522070688"/>            <!-- Note: Replace with actual serial number -->
-    <arg name="camera1"                       default="blue"/>                    <!-- Note: Replace with camera name -->
+    <arg name="realsense" default="true" />
+    <arg name="serial_no_camera1"             default="146322077603"/>            <!-- Note: Replace with actual serial number -->
+    <arg name="camera1"                       default="D435"/>                    <!-- Note: Replace with camera name -->
     <arg name="tf_prefix_camera1"         default="$(arg camera1)"/>
     <arg name="initial_reset"             default="true"/>
 

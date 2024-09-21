@@ -11,12 +11,12 @@ from widowx_envs.policies.vr_teleop_policy import VRTeleopPolicy
 from widowx_envs.policies.policy import NullPolicy
 
 env_params = {
-    'camera_topics': [IMTopic('/yellow/image_raw'),
-                    IMTopic('/blue/image_raw'),
+    'camera_topics': [IMTopic('/D435/color/image_raw'),
+                    #IMTopic('/blue/image_raw'),
                     ],
-    # 'depth_camera_topics': [IMTopic('/D435/depth/image_rect_raw', dtype='16UC1')],
+    'depth_camera_topics': [IMTopic('/D435/depth/image_rect_raw', dtype='16UC1')],
     'gripper_attached': 'custom',
-    'skip_move_to_neutral': True,
+    'skip_move_to_neutral': False,
     'move_to_rand_start_freq': -1,
     'fix_zangle': 0.1,
     'move_duration': 0.2,

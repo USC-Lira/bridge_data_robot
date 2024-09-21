@@ -12,7 +12,7 @@ pyquaternion
 scikit-learn
 scikit-image
 scipy
-six
+six>=1.10
 requests
 nvidia_smi
 rospkg
