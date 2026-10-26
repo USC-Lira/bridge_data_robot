@@ -44,6 +44,19 @@ The RealSense cameras require different drivers than RGB cameras.  If you are us
 
 You will also need to update the device serial number in `widowx_envs/widowx_controller/launch/widowx_rs.launch` to match your cameras.
 
+## Preflight checks
+
+Before every data collection session, run the preflight check from the repo root on the host:
+
+```bash
+python3 widowx_envs/widowx_envs/preflight/preflight.py \
+    --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+```
+
+It verifies the host side (arm serial link, USB camera enumeration, `usb_connector_chart.yml`, the VR headset's adb state, docker, the dataset directory) and then runs the ROS-side checks inside the `robonet` container (arm driver, camera topics, live frames, and that the experiment config you passed only references topics that are actually publishing). It exits non-zero if the session would go wrong, and every failure prints the command that fixes it.
+
+Use `--scope host` before the container is up, and `--list` to see all checks. See [`docs/preflight.md`](docs/preflight.md) for the design and for how to add a check, and [`preflight.example.yaml`](preflight.example.yaml) to describe a differently-cabled rig.
+
 ## Data collection
 
 First, make sure the `robonet-base` container is running using the above command. Then, run the following commands:

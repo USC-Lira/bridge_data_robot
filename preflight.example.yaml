@@ -1,0 +1,86 @@
+# Example preflight config for the LiraLab WidowX station.
+#
+# These values are also the built-in defaults (see
+# widowx_envs/widowx_envs/preflight/config.py), so you only need this file if
+# your rig differs - e.g. you added the Logitech webcams back, or you swapped
+# the D435 for one with a different serial.
+#
+#   python3 widowx_envs/widowx_envs/preflight/preflight.py --config preflight.yaml
+#
+# Needs PyYAML on the host (`sudo apt install python3-yaml`); a .json file with
+# the same keys works with no extra dependency.
+
+robot: widowx
+
+# --- arm -------------------------------------------------------------------- #
+arm_model: wx250s
+# Created by the Interbotix udev rule for the U2D2 board.
+arm_serial_port: /dev/ttyDXL
+arm_joint_states_topic: /wx250s/joint_states
+
+# --- cameras ---------------------------------------------------------------- #
+# One entry per camera the experiment config expects. Must stay in sync with
+# the `camera_topics` / `depth_camera_topics` in
+# widowx_envs/experiments/bridge_data_v2/conf_*.py.
+#
+#   kind: realsense  -> driven by the realsense2_camera nodelet (widowx_rs.launch)
+#   kind: usb        -> driven by multicam_server via usb_connector_chart.yml
+cameras:
+  - name: D435
+    kind: realsense
+    image_topic: /D435/color/image_raw
+    info_topic: /D435/color/camera_info
+    serial: '146322077603'          # must match serial_no_camera1 in widowx_rs.launch
+    v4l2_name: Intel(R) RealSense(TM) Depth Ca
+    width: 640
+    height: 480
+    required: true
+
+  - name: D435_depth
+    kind: realsense
+    image_topic: /D435/depth/image_rect_raw
+    info_topic: /D435/depth/camera_info
+    serial: '146322077603'
+    width: 640
+    height: 480
+    required: true
+
+  # Uncomment if you collect with the fixed Logitech cameras as well. The
+  # chart_key is the key in usb_connector_chart.yml, which is also what the
+  # topic gets named; v4l2_name is the substring that identifies the camera in
+  # `v4l2-ctl --list-devices`.
+  #
+  # - name: blue
+  #   kind: usb
+  #   chart_key: blue
+  #   v4l2_name: 1080P Pro Stream
+  #   image_topic: /blue/image_raw
+  #   required: true
+  #
+  # - name: wrist
+  #   kind: usb
+  #   chart_key: wrist
+  #   v4l2_name: 'Piwebcam: UVC Camera'
+  #   image_topic: /wrist/image_raw
+  #   required: false
+
+usb_connector_chart: usb_connector_chart.yml
+
+# --- teleop ------------------------------------------------------------------ #
+# Set false for scripted/inference sessions that do not need the Quest.
+require_vr_headset: true
+
+# --- data -------------------------------------------------------------------- #
+# Lab-wide layout from the infrastructure doc: /datasets/<task>/<timestamp>.
+dataset_root: /datasets
+# Host side of the $DATA bind mount in docker-compose.yml (where we write today).
+legacy_dataset_root: ~/widowx_data
+min_free_gb: 50.0
+# The container writes as this uid:gid; the host directory must match.
+container_uid: 1000
+container_gid: 1002
+
+# --- container --------------------------------------------------------------- #
+compose_service: robonet
+container_env_vars: [DATA, EXP, ROBONETV2_ARM]
+require_nvidia_runtime: true
