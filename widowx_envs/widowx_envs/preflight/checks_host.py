@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 from typing import Dict, List, Tuple
 
 from widowx_envs.preflight.core import CheckResult, Context, Status, check
@@ -55,6 +56,38 @@ def _unrecorded_remedy(conf: str, topic: str) -> str:
         f"the topics listed in {conf}. If you wanted it in the dataset, add\n"
         f"IMTopic('{topic}') to camera_topics there. Otherwise unplug it or ignore this."
     )
+
+
+def can_write(st: os.stat_result, uid: int, gid: int) -> Tuple[bool, str]:
+    """Whether ``uid``/``gid`` may create files in the directory ``st`` describes.
+
+    Applies the POSIX rule: the owner bits apply if the uid matches, else the
+    group bits if the gid matches, else the "other" bits - and creating a file
+    needs both w and x. Supplementary groups and ACLs are not considered, so
+    this is a prediction; ``container.data_dir`` does the real write test.
+    """
+    if st.st_uid == uid:
+        bits, via = (st.st_mode >> 6) & 0o7, "owner"
+    elif st.st_gid == gid:
+        bits, via = (st.st_mode >> 3) & 0o7, "group"
+    else:
+        bits, via = st.st_mode & 0o7, "other"
+    return (bits & 0o3) == 0o3, via
+
+
+def stat_mode(st: os.stat_result) -> str:
+    return stat.filemode(st.st_mode)
+
+
+def chown_remedy(path: str, uid: int) -> str:
+    """The smallest chown that lets the container's uid write to ``path``.
+
+    If the person running preflight has the container's uid (the usual case on
+    the robot desktop), give the directory to them, so both sides can write.
+    """
+    if os.getuid() == uid:
+        return f"sudo chown -R {uid}:{os.getgid()} {path}"
+    return f"sudo chown -R {uid} {path}"
 
 
 def parse_flat_yaml(text: str) -> Dict[str, str]:
@@ -647,30 +680,44 @@ def dataset_dir(ctx: Context) -> List[CheckResult]:
     cfg = ctx.config
 
     legacy = os.path.expanduser(cfg.legacy_dataset_root)
+    uid, gid = cfg.container_uid, cfg.container_gid
     if not os.path.isdir(legacy):
+        mkdir = f"mkdir -p {legacy}"
+        if os.getuid() != uid:
+            mkdir += f" && {chown_remedy(legacy, uid)}"
         results.append(
             _fail(
                 f"{name}.mount",
                 f"{legacy} does not exist (it is the host side of the $DATA mount)",
-                remedy=f"mkdir -p {legacy} && sudo chown -R "
-                f"{cfg.container_uid}:{cfg.container_gid} {legacy}",
+                remedy=f"{mkdir}\n"
+                "Create it BEFORE starting the container: if it is missing, docker creates\n"
+                "it owned by root and the container cannot write to it.",
             )
         )
     else:
         st = os.stat(legacy)
-        if (st.st_uid, st.st_gid) != (cfg.container_uid, cfg.container_gid):
+        ok, via = can_write(st, uid, gid)
+        perms = f"{st.st_uid}:{st.st_gid} {stat_mode(st)}"
+        if not ok:
+            hint = ""
+            if st.st_uid == 0:
+                hint = ("Owned by root: docker probably created it because it did not exist\n"
+                        "when the container first started.\n")
             results.append(
                 _fail(
-                    f"{name}.ownership",
-                    f"{legacy} is owned by {st.st_uid}:{st.st_gid}, "
-                    f"container writes as {cfg.container_uid}:{cfg.container_gid}",
-                    remedy=f"sudo chown -R {cfg.container_uid}:{cfg.container_gid} {legacy}\n"
-                    "Otherwise the collection script fails with a permission error only\n"
-                    "*after* you have teleoperated a trajectory.",
+                    f"{name}.writable",
+                    f"container user {uid}:{gid} cannot write to {legacy} ({perms})",
+                    remedy=hint
+                    + "Collection would fail with a permission error only *after* you have\n"
+                    "teleoperated a trajectory. Check what is inside first (ls -la), then:\n"
+                    f"  {chown_remedy(legacy, uid)}",
                 )
             )
         else:
-            results.append(_ok(f"{name}.ownership", f"{legacy} owned by {st.st_uid}:{st.st_gid}"))
+            results.append(
+                _ok(f"{name}.writable", f"{legacy} writable by container user {uid}:{gid} "
+                    f"(as {via}; {perms})")
+            )
 
         free_gb = shutil.disk_usage(legacy).free / 1e9
         if free_gb < cfg.min_free_gb:
@@ -693,8 +740,7 @@ def dataset_dir(ctx: Context) -> List[CheckResult]:
                 f"{name}.unified_root",
                 f"{unified} does not exist",
                 remedy=f"The lab-wide layout is {unified}/<task_instruction>/<timestamp>.\n"
-                f"sudo mkdir -p {unified} && sudo chown -R "
-                f"{cfg.container_uid}:{cfg.container_gid} {unified}",
+                f"sudo mkdir -p {unified} && {chown_remedy(unified, uid)}",
             )
         )
     else:

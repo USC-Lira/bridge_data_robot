@@ -98,7 +98,7 @@ deadline:
 | `host.v4l2_devices` | a camera is not enumerated at all |
 | `host.usb_connector_chart` | see below — the big one |
 | `host.vr_headset` | no adb device, or `unauthorized` instead of `device` |
-| `host.dataset_dir` | `$HOME/widowx_data` missing, wrong owner, or nearly full |
+| `host.dataset_dir` | `$HOME/widowx_data` missing, not writable by the container user (predicted from permission bits; `container.data_dir` does a real write), or nearly full |
 | `host.robonet_container` | window 1 was never started |
 
 ### Container

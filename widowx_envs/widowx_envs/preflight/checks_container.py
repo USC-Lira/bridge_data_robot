@@ -134,8 +134,9 @@ def data_dir(ctx: Context) -> CheckResult:
         return _fail(
             name,
             f"{path} is not writable: {exc}",
-            remedy="On the host: sudo chown -R "
-            f"{ctx.config.container_uid}:{ctx.config.container_gid} $HOME/widowx_data",
+            remedy="On the host, check what is inside $HOME/widowx_data (ls -la), then give it\n"
+            f"to uid {ctx.config.container_uid}, e.g. sudo chown -R $(id -u):$(id -g) $HOME/widowx_data\n"
+            f"if your login user is uid {ctx.config.container_uid}. Then re-run preflight.",
         )
     return _ok(name, f"{path} writable")
 
