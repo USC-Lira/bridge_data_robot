@@ -37,6 +37,26 @@ def _skip(name, summary) -> CheckResult:
     return CheckResult(name, Status.SKIP, summary)
 
 
+def _session_conf(ctx: Context) -> str:
+    """Basename of the --conf file if the cameras were taken from it, else ''.
+
+    Only then do we know what will be recorded, and can warn about cameras
+    that are connected but not recorded.
+    """
+    sel = ctx.cache.get("conf_selection") or {}
+    if "cameras" not in sel:
+        return ""
+    return os.path.basename(ctx.cache.get("conf_file", ""))
+
+
+def _unrecorded_remedy(conf: str, topic: str) -> str:
+    return (
+        f"It still streams, but nothing records it: run_data_collection.py records only\n"
+        f"the topics listed in {conf}. If you wanted it in the dataset, add\n"
+        f"IMTopic('{topic}') to camera_topics there. Otherwise unplug it or ignore this."
+    )
+
+
 def parse_flat_yaml(text: str) -> Dict[str, str]:
     """Parse the ``key: 'value'`` subset of YAML that the connector chart uses.
 
@@ -182,42 +202,143 @@ def arm_serial_port(ctx: Context) -> CheckResult:
 # --------------------------------------------------------------------------- #
 
 
-@check("host.v4l2_devices", scope="host")
-def v4l2_devices(ctx: Context) -> CheckResult:
-    """Every camera the collection config expects is enumerated by v4l2."""
-    if not ctx.have("v4l2-ctl"):
-        return _warn(
-            "host.v4l2_devices",
-            "v4l2-ctl not installed on the host; cannot enumerate cameras",
-            remedy="sudo apt install v4l-utils (the container has it, the host needs it too\n"
-            "because preflight runs generate_usb_config.sh on the host).",
+@check("host.conf_cameras", scope="host")
+def conf_cameras(ctx: Context) -> List[CheckResult]:
+    """The cameras this session needs, read from the --conf experiment file."""
+    name = "host.conf_cameras"
+    sel = ctx.cache.get("conf_selection")
+    defaults = ", ".join(c.name for c in ctx.config.cameras) or "none"
+    if sel is None:
+        return [
+            _ok(
+                name,
+                f"no --conf given; expecting the default cameras: {defaults}",
+            )
+        ]
+    conf = os.path.basename(ctx.cache.get("conf_file", ""))
+    if "error" in sel:
+        return [
+            _fail(
+                name,
+                sel["error"],
+                remedy="run_data_collection.py would fail to load it too. Fix the file, then re-run.",
+            )
+        ]
+    if sel.get("empty"):
+        return [
+            _warn(
+                name,
+                f"no IMTopic(...) found in camera_topics / depth_camera_topics of {conf}; "
+                f"expecting the default cameras: {defaults}",
+                remedy="Preflight reads the conf without running it, so topics built in a loop or\n"
+                "imported from elsewhere are invisible to it. Write them as literal\n"
+                "IMTopic('/topic') entries, or describe the cameras with --config.",
+            )
+        ]
+
+    by_name = {c.name: c for c in ctx.config.cameras}
+    listing = ", ".join(f"{n} ({by_name[n].image_topic})" for n in sel["cameras"]) or "none"
+    results = [_ok(name, f"{conf} records: {listing}")]
+    for topic in sel["unknown"]:
+        results.append(
+            _fail(
+                f"{name}.unknown",
+                f"{conf} records {topic}, but no camera in the catalog publishes it",
+                remedy="A typo in the conf, or a camera preflight does not know about. For a new\n"
+                "camera, add it under camera_catalog in a --config file (see\n"
+                "preflight.example.yaml).",
+                topic=topic,
+            )
         )
+    return results
+
+
+@check("host.v4l2_devices", scope="host")
+def v4l2_devices(ctx: Context) -> List[CheckResult]:
+    """Every camera the collection config expects is enumerated by v4l2."""
+    name = "host.v4l2_devices"
+    if not ctx.have("v4l2-ctl"):
+        return [
+            _warn(
+                name,
+                "v4l2-ctl not installed on the host; cannot enumerate cameras",
+                remedy="sudo apt install v4l-utils (the container has it, the host needs it too\n"
+                "because preflight runs generate_usb_config.sh on the host).",
+            )
+        ]
     rc, out, err = ctx.run(["v4l2-ctl", "--list-devices"])
     # v4l2-ctl exits non-zero when some node can't be opened but still lists the
     # rest, so trust the output rather than the return code.
     blocks = parse_v4l2_devices(out)
     ctx.cache["v4l2_output"] = out
     ctx.cache["v4l2_blocks"] = blocks
-    if not blocks:
-        return _fail(
-            "host.v4l2_devices",
-            "no video devices found",
-            remedy="Check that the cameras are plugged in. Unplug/replug and re-run.",
-            stderr=err.strip(),
-        )
-
-    expected = [c for c in ctx.config.cameras if c.v4l2_name]
-    missing = [c.name for c in expected if not any(c.v4l2_name in h for h, _ in blocks)]
     found = [h for h, _ in blocks]
-    if missing:
-        return _fail(
-            "host.v4l2_devices",
-            f"camera(s) not enumerated: {', '.join(missing)}",
-            remedy="Replug the camera(s). If you moved a camera to a different USB port you\n"
-            "must re-run preflight afterwards (it regenerates usb_connector_chart.yml).",
-            found=found,
-        )
-    return _ok("host.v4l2_devices", f"{len(blocks)} video device(s) enumerated", found=found)
+    if not blocks:
+        return [
+            _fail(
+                name,
+                "no video devices found",
+                remedy="Check that the cameras are plugged in. Unplug/replug and re-run.",
+                stderr=err.strip(),
+            )
+        ]
+
+    # One row per camera the config expects, so a healthy run still says which
+    # device each one is (the RealSense never appears in the usb chart).
+    results: List[CheckResult] = [_ok(name, f"{len(blocks)} video device(s) enumerated", found=found)]
+    claimed = set()
+    for cam in ctx.config.cameras:
+        if not cam.v4l2_name:
+            continue  # e.g. D435_depth: same physical device as D435
+        matches = [(h, devs) for h, devs in blocks if cam.v4l2_name in h]
+        if not matches:
+            status = _fail if cam.required else _warn
+            results.append(
+                status(
+                    f"{name}.{cam.name}",
+                    f"{cam.name} not enumerated (looking for '{cam.v4l2_name}')",
+                    remedy=("Replug the D435, preferably into a USB 3 port."
+                            if cam.kind == "realsense" else
+                            "Replug the camera, then re-run preflight (it regenerates\n"
+                            "usb_connector_chart.yml)."),
+                    found=found,
+                )
+            )
+            continue
+        claimed.update(h for h, _ in matches)
+        driver = "realsense2_camera" if cam.kind == "realsense" else "multicam_server"
+        if len(matches) > 1 and cam.kind == "usb":
+            # e.g. blue and yellow: same model, only the chart tells them apart.
+            summary = (f"{len(matches)} devices named '{cam.v4l2_name}'; "
+                       f"usb_connector_chart.yml decides which one is /{cam.chart_key or cam.name}")
+        else:
+            summary = "; ".join(f"{h.rstrip(':')} {devs[0] if devs else ''}".strip() for h, devs in matches)
+        results.append(_ok(f"{name}.{cam.name}", f"{summary} [{driver}]"))
+
+    others = [h for h in found if h not in claimed]
+    conf = _session_conf(ctx)
+    unknown = []
+    for header in others:
+        known = [c for c in ctx.config.catalog if c.v4l2_name and c.v4l2_name in header]
+        if conf and known and known[0].kind == "realsense":
+            cam = known[0]
+            results.append(
+                _warn(
+                    f"{name}.{cam.name}",
+                    f"{cam.name} is connected but {conf} does not record it",
+                    remedy=_unrecorded_remedy(conf, cam.image_topic),
+                )
+            )
+        elif known and known[0].kind == "usb":
+            # Webcams are reported per chart entry in host.usb_connector_chart,
+            # which is the only place blue and yellow can be told apart.
+            continue
+        else:
+            unknown.append(header.rstrip(":"))
+    if unknown:
+        label = "not needed this session" if conf else "not in the default camera list"
+        results.append(_ok(f"{name}.other", f"{label}: {'; '.join(unknown)}", devices=unknown))
+    return results
 
 
 def _regenerate_chart(ctx: Context, path: str) -> List[CheckResult]:
@@ -277,7 +398,7 @@ def _regenerate_chart(ctx: Context, path: str) -> List[CheckResult]:
         return [_ok(name, f"created {rel}: {listing}")]
 
     added = [k for k in new if k not in old]
-    rs_names = {c.name for c in ctx.config.realsense_cameras} | {"D435"}
+    rs_names = {c.name for c in ctx.config.catalog if c.kind == "realsense"}
     removed = [k for k in old if k not in new and k not in rs_names]
     removed_rs = [k for k in old if k not in new and k in rs_names]
     moved = {k: (old[k], new[k]) for k in new if k in old and old[k] != new[k]}
@@ -372,6 +493,10 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
             )
         )
 
+    conf = _session_conf(ctx)
+    needed = {c.chart_key or c.name for c in ctx.config.usb_cameras}
+    rs_names = {c.name for c in ctx.config.catalog if c.kind == "realsense"}
+
     # 3. Each value must resolve to exactly one v4l2 device block. The passing
     #    rows double as the "which topic is which camera" report.
     if blocks is None:
@@ -405,7 +530,17 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
             else:
                 header, devs = matches[0]
                 # start_streamers.py opens the first node listed under the header.
-                results.append(_ok(f"{name}.{key}", f"/{key} -> {header.rstrip(':')} {devs[0]}"))
+                mapping = f"/{key} -> {header.rstrip(':')} {devs[0]}"
+                if conf and key not in needed and key not in rs_names:
+                    results.append(
+                        _warn(
+                            f"{name}.{key}",
+                            f"{mapping}, but {conf} does not record it",
+                            remedy=_unrecorded_remedy(conf, f"/{key}/image_raw"),
+                        )
+                    )
+                else:
+                    results.append(_ok(f"{name}.{key}", mapping))
 
     # 4. USB webcams the config expects must be in the chart.
     for cam in ctx.config.usb_cameras:
@@ -417,14 +552,14 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
         results.append(
             status(
                 f"{name}.{key}",
-                f"config expects USB camera '{key}' but it is not in {rel}",
+                f"this session needs USB camera '{key}' but it is not in {rel}",
                 remedy=f"Plug in the {key} camera{hint} and re-run preflight. multicam_server\n"
                 f"will not publish /{key} without it.",
             )
         )
 
     # 5. A RealSense driven by the nodelet must not also be in the chart.
-    rs_names = {c.name for c in ctx.config.realsense_cameras}
+    rs_names = {c.name for c in ctx.config.catalog if c.kind == "realsense"}
     conflicting = [k for k in chart if k in rs_names]
     if conflicting:
         results.append(
@@ -439,7 +574,7 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
         )
 
     if not chart and not ctx.config.usb_cameras:
-        results.append(_ok(name, f"no USB webcams in {rel} (config expects none)"))
+        results.append(_ok(name, f"no USB webcams in {rel} (none needed this session)"))
     elif not any(r.name != f"{name}.generate" for r in results):
         results.append(_ok(name, f"{len(chart)} entries"))
     return results

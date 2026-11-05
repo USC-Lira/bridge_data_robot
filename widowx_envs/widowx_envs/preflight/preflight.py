@@ -43,7 +43,11 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     __package__ = "widowx_envs.preflight"
 
-from widowx_envs.preflight.config import PreflightConfig  # noqa: E402
+from widowx_envs.preflight.config import (  # noqa: E402
+    PreflightConfig,
+    read_conf_topics,
+    select_cameras_from_conf,
+)
 from widowx_envs.preflight.core import (  # noqa: E402
     CheckResult,
     Context,
@@ -134,6 +138,23 @@ def run_container_checks_from_host(args, config: PreflightConfig, repo_root: str
     return [CheckResult.from_dict(d) for d in json.loads(blob)["results"]]
 
 
+def apply_conf_cameras(config: PreflightConfig, conf_path: str) -> dict:
+    """Replace ``config.cameras`` with the catalog cameras the experiment conf records.
+
+    Returns what happened, for the ``host.conf_cameras`` check to report. On
+    any problem the cameras are left as they were.
+    """
+    try:
+        topics = read_conf_topics(conf_path)
+    except (OSError, ValueError) as exc:
+        return {"error": f"could not read {conf_path}: {exc}"}
+    cameras, unknown = select_cameras_from_conf(config, topics)
+    if not cameras and not unknown:
+        return {"empty": True, "topics": topics}
+    config.cameras = cameras
+    return {"cameras": [c.name for c in cameras], "unknown": unknown, "topics": topics}
+
+
 def _quote(arg: str) -> str:
     return "'" + arg.replace("'", "'\\''") + "'"
 
@@ -194,6 +215,9 @@ def main(argv=None) -> int:
     ctx = Context(config=config, repo_root=repo_root, verbose=args.verbose)
     if args.conf:
         ctx.cache["conf_file"] = os.path.abspath(args.conf) if not in_container() else args.conf
+        # With --config-b64 the host already did this and passed the result in.
+        if not args.config_b64:
+            ctx.cache["conf_selection"] = apply_conf_cameras(config, ctx.cache["conf_file"])
 
     scope = args.scope
     if scope == "all" and in_container():

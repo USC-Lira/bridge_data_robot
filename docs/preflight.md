@@ -90,6 +90,7 @@ deadline:
 | name | catches |
 |---|---|
 | `host.repo_root` | running from the wrong directory |
+| `host.conf_cameras` | which cameras `--conf` records; a conf topic no known camera publishes |
 | `host.docker_cli` | docker / compose v2 plugin missing |
 | `host.docker_permissions` | the `usermod -aG docker` problem from the README |
 | `host.nvidia_runtime` | `runtime: nvidia` in compose will fail |
@@ -174,12 +175,35 @@ code, not something I have reproduced — verify at the rig.)*
 ## Configuration
 
 Expectations live in `config.py` (`PreflightConfig`, `CameraSpec`), not in the
-check bodies, so re-cabling the rig is a config edit. Defaults describe the
-current station: D435 colour + depth, no webcams, matching `conf_jesse.py`.
-Override with `--config preflight.yaml`; see `preflight.example.yaml`.
+check bodies, so re-cabling the rig is a config edit. Override with
+`--config preflight.yaml`; see `preflight.example.yaml`.
 
-**Keep `cameras:` in sync with whichever `conf_*.py` you collect with** — or
-better, just pass `--conf`, which validates the real thing.
+There are two configs because they answer different questions:
+
+- the **experiment conf** (`conf_*.py`) says *what to record*. It imports ROS,
+  so the host cannot import it.
+- the **preflight config** says *what the rig is*: arm port, dataset root,
+  container uid, and a `camera_catalog` of every camera the rig can have with
+  how to find it (driver, v4l2 name, RealSense serial, topics).
+
+Which cameras a session needs comes from the conf, not from preflight. With
+`--conf`, `host.conf_cameras` reads the conf's source with `ast` (no ROS, no
+execution), takes the `IMTopic('...')` entries in `camera_topics` /
+`depth_camera_topics`, and requires exactly the catalog cameras with those
+image topics. Commented-out topics are ignored; a topic with no catalog entry
+fails. The selection is handed to the container side too, so
+`container.camera_topics` checks the same set. Without `--conf`, the
+`cameras:` defaults apply (D435 colour + depth, matching `conf_jesse.py`).
+
+A camera that is connected but **not** recorded by the conf is a warning, not a
+failure: it still streams (the chart lists every connected webcam, so the chart
+does not change with the conf), but `run_data_collection.py` records only the
+conf's topics, so it will not be in the dataset. The warning is there for the
+"plugged it in, forgot to add it to the conf" case. Without `--conf` there is no
+way to know what will be recorded, so extra cameras are only listed.
+
+Topics built in a loop or imported from another module are invisible to the
+`ast` reader; `host.conf_cameras` warns and falls back to the defaults.
 
 ## Usage
 
