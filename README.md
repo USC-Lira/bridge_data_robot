@@ -12,7 +12,7 @@ First, install the dependencies on the host machine by running `./host_install.s
 Next, we need to build and launch the ROS service that communicates with the robot. This service is defined by the `robonet` entry in `docker-compose.yml`. It uses the `robonet-base` image which is built from the `widowx_envs` directory (see `widowx_envs/Dockerfile`). To build and run the `robonet-base` service, run:
 
 ```bash
-# first generate the usb config file
+# first generate the usb config file (preflight.py also does this for you, see below)
 ./generate_usb_config.sh
 
 # build and run the robonet service
@@ -53,7 +53,7 @@ python3 widowx_envs/widowx_envs/preflight/preflight.py \
     --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
 ```
 
-It verifies the host side (arm serial link, USB camera enumeration, `usb_connector_chart.yml`, the VR headset's adb state, docker, the dataset directory) and then runs the ROS-side checks inside the `robonet` container (arm driver, camera topics, live frames, and that the experiment config you passed only references topics that are actually publishing). It exits non-zero if the session would go wrong, and every failure prints the command that fixes it.
+It verifies the host side (arm serial link, USB camera enumeration, `usb_connector_chart.yml` - which it regenerates on every run with `./generate_usb_config.sh`, pass `--no-generate` to keep a hand-edited one -, the VR headset's adb state, docker, the dataset directory) and then runs the ROS-side checks inside the `robonet` container (arm driver, camera topics, live frames, and that the experiment config you passed only references topics that are actually publishing). It exits non-zero if the session would go wrong, and every failure prints the command that fixes it.
 
 Use `--scope host` before the container is up, and `--list` to see all checks. See [`docs/preflight.md`](docs/preflight.md) for the design and for how to add a check, and [`preflight.example.yaml`](preflight.example.yaml) to describe a differently-cabled rig.
 

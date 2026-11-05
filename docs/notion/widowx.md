@@ -27,7 +27,7 @@ Quest 2.
 2. **Arm data** — mini-USB → USB from the arm to the desktop. This is what
    becomes `/dev/ttyDXL`.
 3. **Cameras** — the RealSense D435 over USB (use a USB 3 port). If you move a
-   camera to a different port you **must** re-run `./generate_usb_config.sh`.
+   camera to a different port, re-run preflight (it regenerates the chart).
 4. **Quest 2** (teleop only) — USB-C → USB to the desktop. Leave it plugged in
    during teleop; it both charges and carries the control data.
    1. Turn the headset on.
@@ -72,8 +72,8 @@ Two terminal windows. Window 1 runs the robot; window 2 runs collection.
 ```bash
 cd ~/bridge_data_robot
 
-# only when a camera is new or moved USB ports
-./generate_usb_config.sh
+# writes usb_connector_chart.yml for whatever cameras are plugged in
+python3 widowx_envs/widowx_envs/preflight/preflight.py --scope host
 
 USB_CONNECTOR_CHART=$(pwd)/usb_connector_chart.yml docker compose up --build robonet
 ```
@@ -81,10 +81,10 @@ USB_CONNECTOR_CHART=$(pwd)/usb_connector_chart.yml docker compose up --build rob
 This builds and runs Ubuntu + ROS + all dependencies, and starts the arm driver
 and camera nodes. **Leave it running.**
 
-> ⚠️ If you have several cameras connected, check `./usb_connector_chart.yml`
-> before continuing — each camera must have its own non-empty USB path. An
-> empty entry silently binds that topic to the **wrong camera**, and the
-> recorded data looks fine until you inspect it. `preflight.py` fails on this.
+> ⚠️ The two Logitech webcams have the same name, so blue/yellow are assigned
+> by enumeration order. If preflight warns that a topic **now points at a
+> different USB port**, check the images before collecting — blue and yellow
+> may have swapped. The previous chart is kept in `usb_connector_chart.yml.bak`.
 
 > 📷 *Attach: screenshot of healthy roslaunch output.*
 
@@ -212,7 +212,7 @@ python examples/02_finetune_on_lira_data.py \
 | `No RealSense devices were found!` | D435 not enumerated, wrong serial in `widowx_rs.launch`, or the D435 is **also** listed in `usb_connector_chart.yml` so two drivers fight over it | Replug (USB 3), check the serial, remove the D435 line from the chart |
 | `PermissionError: [Errno 13]` from docker | user not in the `docker` group | `sudo groupadd docker; sudo usermod -aG docker $USER`, then **reboot** |
 | Collection hangs with no error at startup | `CameraRecorder` waiting forever on a `camera_info` topic that does not exist | `rostopic list \| grep camera_info`; set `info_name` explicitly on the `IMTopic` |
-| Data recorded from the wrong camera | empty/duplicate entry in `usb_connector_chart.yml` | `./generate_usb_config.sh` with all cameras plugged in; run preflight |
+| Data recorded from the wrong camera | empty/duplicate entry in `usb_connector_chart.yml` | Plug in all cameras and run preflight (it regenerates the chart) |
 | Permission error when saving, after teleoperating | `$HOME/widowx_data` owned by the wrong uid | `sudo chown -R 1000:1002 $HOME/widowx_data` |
 | Arm driver fails to start | mini-USB unplugged, arm unpowered, or missing udev rule | check cable + power; `ls /dev/ttyDXL` |
 

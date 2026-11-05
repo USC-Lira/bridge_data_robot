@@ -134,8 +134,8 @@ def get_dev(output_string, usb_id):
             return re.search('video(\d+)', lines[i + 1]).group(1)
 ```
 
-`generate_usb_config.sh` writes an empty value for every camera that was not
-plugged in when it ran:
+`generate_usb_config.sh` used to write an empty value for every camera that was
+not plugged in when it ran:
 
 ```yaml
 blue: ''
@@ -147,8 +147,24 @@ wrist: 'usb-0000:00:14.0-2'
 It does not crash. It does not warn. It publishes some other camera's frames on
 `/blue/image_raw`, and you find out weeks later when the dataset looks wrong.
 
-So the chart check is fan-out, and hard-fails on: empty values, duplicate
-values, values matching zero devices, and values matching more than one. It
+The script now writes only the cameras it finds (and `{}` when there are none,
+because an empty file loads as `None` and crashed `start_streamers.py`). It
+also no longer writes the D435, which the RealSense nodelet already drives.
+
+**Preflight regenerates the chart on every run** (`host.usb_connector_chart.generate`),
+so nobody has to remember the script. It writes to a temp file, compares with
+the existing chart, and only replaces it if something changed, keeping the old
+one as `usb_connector_chart.yml.bak`. Because both Logitechs report the same
+v4l2 name, the script tells blue from yellow only by enumeration order; if an
+existing topic now points at a different USB path, that is a **warning** listing
+old -> new, since it may mean blue and yellow swapped. Pass `--no-generate` (or
+set `generate_usb_chart: false`) to check a hand-edited chart as it is.
+
+Then the chart check fans out: one PASS row per topic showing the camera and
+`/dev/video*` node it binds to, and hard-fails on: empty values, duplicate
+values, values matching zero devices, values matching more than one, and a
+required `kind: usb` camera from the config missing from the chart. No webcams
+at all is a PASS when the config expects none (the default D435-only rig). It
 also warns when a RealSense appears in the chart, since `widowx_rs.launch`
 already starts `realsense2_camera` for it and two drivers contending for one
 `/dev/video*` node is a plausible cause of the `No RealSense devices were

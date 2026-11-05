@@ -160,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip", action="append", default=[], metavar="PREFIX", help="skip checks whose name starts with PREFIX (repeatable)")
     p.add_argument("--json", metavar="PATH", help="write the machine-readable report here ('-' for stdout)")
     p.add_argument("--repo-root", help="path to the bridge_data_robot checkout (default: autodetected)")
+    p.add_argument(
+        "--no-generate",
+        action="store_true",
+        help="do not re-run generate_usb_config.sh; check usb_connector_chart.yml as it is",
+    )
     p.add_argument("--list", action="store_true", help="list the registered checks and exit")
     p.add_argument("-v", "--verbose", action="store_true", help="echo the commands being run")
     return p
@@ -172,6 +177,8 @@ def main(argv=None) -> int:
         config = PreflightConfig.from_dict(json.loads(base64.b64decode(args.config_b64)))
     else:
         config = PreflightConfig.load(args.config)
+    if args.no_generate:
+        config.generate_usb_chart = False
 
     if args.list:
         try:

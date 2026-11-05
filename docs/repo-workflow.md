@@ -140,7 +140,7 @@ The Alienware is a shared machine. A few things follow from that:
 - **The checkout at `~/bridge_data_robot` is shared.** Check what branch it is
   on before you start — someone else may have left it on theirs.
 - **`usb_connector_chart.yml` is gitignored and machine-specific.** Never commit
-  it; regenerate it with `./generate_usb_config.sh` when cameras move ports.
+  it; preflight regenerates it on every run (`./generate_usb_config.sh`).
 - **The container mounts `./widowx_envs` live**, so Python edits take effect
   without a rebuild. Only `Dockerfile`/`requirements.txt` changes need
   `docker compose up --build`.

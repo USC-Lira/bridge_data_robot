@@ -63,6 +63,10 @@ class PreflightConfig:
     # -- cameras ------------------------------------------------------------ #
     cameras: List[CameraSpec] = dataclasses.field(default_factory=list)
     usb_connector_chart: str = "usb_connector_chart.yml"
+    # Re-run generate_usb_config.sh on every preflight so the chart always
+    # matches what is plugged in. Turn off (or pass --no-generate) if you keep
+    # a hand-edited chart.
+    generate_usb_chart: bool = True
 
     # -- teleop ------------------------------------------------------------- #
     # The Meta Quest 2 running the RAIL Oculus Teleoperation app, over adb.

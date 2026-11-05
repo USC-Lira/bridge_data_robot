@@ -190,7 +190,7 @@ def v4l2_devices(ctx: Context) -> CheckResult:
             "host.v4l2_devices",
             "v4l2-ctl not installed on the host; cannot enumerate cameras",
             remedy="sudo apt install v4l-utils (the container has it, the host needs it too\n"
-            "because generate_usb_config.sh runs on the host).",
+            "because preflight runs generate_usb_config.sh on the host).",
         )
     rc, out, err = ctx.run(["v4l2-ctl", "--list-devices"])
     # v4l2-ctl exits non-zero when some node can't be opened but still lists the
@@ -214,15 +214,101 @@ def v4l2_devices(ctx: Context) -> CheckResult:
             "host.v4l2_devices",
             f"camera(s) not enumerated: {', '.join(missing)}",
             remedy="Replug the camera(s). If you moved a camera to a different USB port you\n"
-            "must re-run ./generate_usb_config.sh afterwards.",
+            "must re-run preflight afterwards (it regenerates usb_connector_chart.yml).",
             found=found,
         )
     return _ok("host.v4l2_devices", f"{len(blocks)} video device(s) enumerated", found=found)
 
 
+def _regenerate_chart(ctx: Context, path: str) -> List[CheckResult]:
+    """Re-run generate_usb_config.sh and replace the chart if the result differs.
+
+    The two Logitech webcams report the same v4l2 name, so the script tells
+    them apart only by list order (first is blue, second is yellow). If a
+    camera moves port, or a second one is plugged in, an existing topic can
+    end up pointing at a different physical camera. That is reported as a
+    warning with the old and new USB paths, never silently.
+    """
+    name = "host.usb_connector_chart.generate"
+    rel = os.path.relpath(path, ctx.repo_root)
+    if not ctx.have("v4l2-ctl"):
+        return [
+            _warn(
+                name,
+                f"v4l2-ctl not installed; cannot regenerate, checking {rel} as it is",
+                remedy="sudo apt install v4l-utils",
+            )
+        ]
+
+    script = os.path.join(ctx.repo_root, "generate_usb_config.sh")
+    new_path = path + ".new"
+    try:
+        rc, out, err = ctx.run(["bash", script, new_path], timeout=30)
+        if rc != 0 or not os.path.exists(new_path):
+            return [
+                _fail(
+                    name,
+                    "generate_usb_config.sh failed",
+                    remedy=f"Run it by hand to see the error: ./generate_usb_config.sh\n{err.strip()}",
+                )
+            ]
+        with open(new_path) as f:
+            new = parse_flat_yaml(f.read())
+
+        old = None
+        if os.path.exists(path):
+            with open(path) as f:
+                old = {k: v for k, v in parse_flat_yaml(f.read()).items() if v}
+
+        listing = ", ".join(f"{k} ({v})" for k, v in new.items()) or "no USB webcams"
+        if old == new:
+            return [_ok(name, f"{rel} up to date: {listing}")]
+
+        backup = None
+        if old is not None:
+            backup = path + ".bak"
+            shutil.copyfile(path, backup)
+        os.replace(new_path, path)
+    finally:
+        if os.path.exists(new_path):
+            os.remove(new_path)
+
+    if old is None:
+        return [_ok(name, f"created {rel}: {listing}")]
+
+    added = [k for k in new if k not in old]
+    rs_names = {c.name for c in ctx.config.realsense_cameras} | {"D435"}
+    removed = [k for k in old if k not in new and k not in rs_names]
+    removed_rs = [k for k in old if k not in new and k in rs_names]
+    moved = {k: (old[k], new[k]) for k in new if k in old and old[k] != new[k]}
+    notes = []
+    if added:
+        notes.append(f"added {', '.join(added)}")
+    if removed:
+        notes.append(f"dropped {', '.join(removed)} (not connected)")
+    if removed_rs:
+        notes.append(f"dropped {', '.join(removed_rs)} (RealSense, streamed by its own node)")
+    summary = f"updated {rel}: {listing}" + (f" [{'; '.join(notes)}]" if notes else "")
+
+    if moved:
+        return [
+            _warn(
+                name,
+                summary,
+                remedy="These topics now point at a different USB port than before:\n"
+                + "\n".join(f"  /{k}: {a} -> {b}" for k, (a, b) in moved.items())
+                + "\nIf a camera moved port that is expected. If not, blue and yellow may have\n"
+                "swapped (they are told apart only by enumeration order): check the images\n"
+                f"before collecting. Previous chart saved to {os.path.relpath(backup, ctx.repo_root)}.",
+                moved={k: list(v) for k, v in moved.items()},
+            )
+        ]
+    return [_ok(name, summary)]
+
+
 @check("host.usb_connector_chart", scope="host", requires=["host.repo_root"])
 def usb_connector_chart(ctx: Context) -> List[CheckResult]:
-    """usb_connector_chart.yml exists and every entry resolves to exactly one camera.
+    """usb_connector_chart.yml is regenerated and every entry resolves to exactly one camera.
 
     This is the single most common source of silent, hard-to-debug data
     corruption on this rig: the chart's keys become ROS topic names and its
@@ -232,37 +318,40 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
     """
     name = "host.usb_connector_chart"
     path = os.path.join(ctx.repo_root, ctx.config.usb_connector_chart)
+    rel = os.path.relpath(path, ctx.repo_root)
+    results: List[CheckResult] = []
+
+    if ctx.config.generate_usb_chart:
+        results += _regenerate_chart(ctx, path)
+
     if not os.path.exists(path):
-        return [
+        results.append(
             _fail(
                 name,
-                f"{ctx.config.usb_connector_chart} is missing",
-                remedy="Run ./generate_usb_config.sh from the repo root.",
+                f"{rel} is missing",
+                remedy="Run ./generate_usb_config.sh from the repo root (or re-run preflight\n"
+                "without --no-generate).",
             )
-        ]
+        )
+        return results
 
     with open(path) as f:
         chart = parse_flat_yaml(f.read())
     ctx.cache["usb_chart"] = chart
-    if not chart:
-        return [_fail(name, f"{path} is empty", remedy="Re-run ./generate_usb_config.sh.")]
-
-    results: List[CheckResult] = []
     blocks = ctx.cache.get("v4l2_blocks")
 
-    # 1. Empty values are actively dangerous, not merely useless.
+    # 1. Empty values are actively dangerous, not merely useless. The script no
+    #    longer writes them, but an old or hand-edited chart may still have them.
     empty = [k for k, v in chart.items() if not v]
     if empty:
         results.append(
             _fail(
                 f"{name}.empty_entries",
                 f"entries with no USB path: {', '.join(empty)}",
-                remedy="generate_usb_config.sh writes an empty value for every camera that was\n"
-                "not plugged in when it ran. start_streamers.py matches chart values\n"
-                "against `v4l2-ctl --list-devices` with a substring test, so an empty\n"
-                "value matches the FIRST device and silently binds that topic to the\n"
-                "wrong camera. Delete the unused lines or replug the camera and re-run\n"
-                "./generate_usb_config.sh.",
+                remedy="start_streamers.py matches chart values against `v4l2-ctl --list-devices`\n"
+                "with a substring test, so an empty value matches the FIRST device and\n"
+                "silently binds that topic to the wrong camera. Delete these lines, or\n"
+                "re-run preflight without --no-generate.",
                 entries=empty,
             )
         )
@@ -278,12 +367,13 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
             _fail(
                 f"{name}.duplicate_entries",
                 "; ".join(f"{', '.join(ks)} all point at {v}" for v, ks in dupes.items()),
-                remedy="Each camera must have its own USB path. Re-run ./generate_usb_config.sh,\n"
-                "and if two cameras share a hub port, move one to a different port.",
+                remedy="Each camera must have its own USB path. If two cameras share a hub port,\n"
+                "move one to a different port and re-run preflight.",
             )
         )
 
-    # 3. Each value must resolve to exactly one v4l2 device block.
+    # 3. Each value must resolve to exactly one v4l2 device block. The passing
+    #    rows double as the "which topic is which camera" report.
     if blocks is None:
         results.append(
             _skip(f"{name}.resolves", "v4l2-ctl unavailable; cannot verify chart entries")
@@ -292,14 +382,14 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
         for key, value in chart.items():
             if not value:
                 continue  # already reported above
-            matches = [h for h, devs in blocks if value in h and devs]
+            matches = [(h, devs) for h, devs in blocks if value in h and devs]
             if not matches:
                 results.append(
                     _fail(
                         f"{name}.{key}",
                         f"'{value}' matches no connected camera",
                         remedy=f"The camera for topic /{key} is unplugged or moved ports.\n"
-                        "Replug it and re-run ./generate_usb_config.sh.",
+                        "Replug it and re-run preflight.",
                     )
                 )
             elif len(matches) > 1:
@@ -309,13 +399,31 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
                         f"'{value}' is ambiguous, it matches {len(matches)} devices",
                         remedy="start_streamers.py takes the first match, so /%s may bind to the\n"
                         "wrong camera. Make the USB path in the chart more specific." % key,
-                        matches=matches,
+                        matches=[h for h, _ in matches],
                     )
                 )
             else:
-                results.append(_ok(f"{name}.{key}", f"/{key} -> {matches[0]}"))
+                header, devs = matches[0]
+                # start_streamers.py opens the first node listed under the header.
+                results.append(_ok(f"{name}.{key}", f"/{key} -> {header.rstrip(':')} {devs[0]}"))
 
-    # 4. A RealSense driven by the nodelet must not also be in the chart.
+    # 4. USB webcams the config expects must be in the chart.
+    for cam in ctx.config.usb_cameras:
+        key = cam.chart_key or cam.name
+        if chart.get(key):
+            continue
+        status = _fail if cam.required else _warn
+        hint = f" ({cam.v4l2_name})" if cam.v4l2_name else ""
+        results.append(
+            status(
+                f"{name}.{key}",
+                f"config expects USB camera '{key}' but it is not in {rel}",
+                remedy=f"Plug in the {key} camera{hint} and re-run preflight. multicam_server\n"
+                f"will not publish /{key} without it.",
+            )
+        )
+
+    # 5. A RealSense driven by the nodelet must not also be in the chart.
     rs_names = {c.name for c in ctx.config.realsense_cameras}
     conflicting = [k for k in chart if k in rs_names]
     if conflicting:
@@ -330,7 +438,9 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
             )
         )
 
-    if not results:
+    if not chart and not ctx.config.usb_cameras:
+        results.append(_ok(name, f"no USB webcams in {rel} (config expects none)"))
+    elif not any(r.name != f"{name}.generate" for r in results):
         results.append(_ok(name, f"{len(chart)} entries"))
     return results
 

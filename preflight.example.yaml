@@ -65,6 +65,8 @@ cameras:
   #   required: false
 
 usb_connector_chart: usb_connector_chart.yml
+# Re-run generate_usb_config.sh on every preflight (same as omitting --no-generate).
+generate_usb_chart: true
 
 # --- teleop ------------------------------------------------------------------ #
 # Set false for scripted/inference sessions that do not need the Quest.
