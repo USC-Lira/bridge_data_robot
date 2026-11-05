@@ -63,10 +63,15 @@ RUN curl 'https://raw.githubusercontent.com/Interbotix/interbotix_ros_manipulato
 # fails without stopping the script, and the build only breaks at our
 # catkin_make below. Re-run rosdep including EOL distros, and without -r so a
 # dependency that cannot be installed fails here, loudly.
+# The skipped keys are Interbotix perception packages: the script is told not to
+# install perception ("n" above), so they stay CATKIN_IGNOREd and are not built,
+# but interbotix_landmark_modules and the interbotix_ros_xsarms metapackage still
+# declare them as dependencies.
 RUN rosdep update --include-eol-distros \
     && sudo apt-get update \
     && cd ~/interbotix_ws \
-    && rosdep install --from-paths src --ignore-src -y --rosdistro noetic
+    && rosdep install --from-paths src --ignore-src -y --rosdistro noetic \
+       --skip-keys "interbotix_perception_modules interbotix_xsarm_perception"
 ENV PYTHONPATH="${PYTHONPATH}:~/interbotix_ws/src/interbotix_ros_toolboxes/interbotix_xs_toolbox"
 
 # install python dependencies
