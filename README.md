@@ -59,6 +59,8 @@ Use `--scope host` before the container is up, and `--list` to see all checks. S
 
 ## Data collection
 
+The quickest way: `python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py` runs preflight, starts the container if needed, asks you to confirm the headset is ready, and starts collection. `python3 stop_container.py` stops the container afterwards. The manual steps follow.
+
 First, make sure the `robonet-base` container is running using the above command. Then, run the following commands:
 
 Collected data is written to `/datasets` on the host (`$DATA` in the container, see `docker-compose.yml`). Preflight creates that folder the first time, owned by the container user. Sessions recorded before this live in `$HOME/widowx_data` and were not moved.

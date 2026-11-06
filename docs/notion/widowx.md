@@ -72,6 +72,20 @@ Details and how to add checks: [`docs/preflight.md`](https://github.com/USC-Lira
 
 ## 3. Data collection
 
+### The short way: one command
+
+```bash
+cd ~/bridge_data_robot
+python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+```
+
+It runs preflight with that conf (which starts the container if needed). If
+preflight ends without a FAIL, it asks whether to start collecting, then asks
+you to confirm the **RAIL Oculus Teleoperation app is open** in the headset and
+the **headset is facing you**, and starts `run_data_collection.py` with the
+same conf. `Ctrl+C` stops collection; `python3 stop_container.py` stops the
+container. The two windows below are what it does for you.
+
 ### Window 1 — preflight starts the robot
 
 ```bash
