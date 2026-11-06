@@ -333,6 +333,7 @@ def collection_config(ctx: Context) -> List[CheckResult]:
         ]
 
     results = [_ok(f"{name}.import", f"{os.path.basename(conf_path)} imports cleanly")]
+    ctx.cache["conf_config"] = config  # for container.control_start
 
     # Short-form confs (simple_conf.make_config) carry the metadata inline.
     if "metadata" in config:
@@ -402,3 +403,84 @@ def collection_config(ctx: Context) -> List[CheckResult]:
                 )
             )
     return results
+
+
+@check("container.control_start", scope="container")
+def control_start(ctx: Context) -> List[CheckResult]:
+    """The start pose from the conf's fixed axes is reachable (IK + joint limits), without moving."""
+    name = "container.control_start"
+    config = ctx.cache.get("conf_config")
+    if config is None:
+        return [_skip(name, "no --conf given, or it did not import")]
+    control = (config.get("policy") or {}).get("control")
+    from widowx_envs.control_utils import fixed_axes, fixed_start_pose
+    fixed = fixed_axes(control)
+    if not fixed:
+        return [_ok(name, "no fixed x/y/z/roll/pitch/yaw in the conf: nothing to move to")]
+
+    import numpy as np
+    import modern_robotics as mr
+    import widowx_envs.utils.transformation_utils as tr
+    from interbotix_xs_modules import mr_descriptions as mrd
+    from widowx_controller.widowx_controller import DEFAULT_ROTATION, NEUTRAL_JOINT_STATE
+
+    arm = ctx.config.arm_model
+    robot = getattr(mrd, arm, None)
+    if robot is None:
+        return [_warn(name, f"no kinematic description for arm model {arm!r}; cannot check")]
+    env_params = (config.get("agent") or {}).get("env", (None, {}))[1] or {}
+    base_angle = env_params.get("workspace_rotation_angle_z", 0) or 0
+    default_rot = np.dot(tr.eulerAnglesToRotationMatrix([0, 0, base_angle]), DEFAULT_ROTATION)
+
+    # Same pose VR_WidowX moves to: neutral, with the fixed values swapped in.
+    neutral = mr.FKinSpace(robot.M, robot.Slist, NEUTRAL_JOINT_STATE)
+    target = fixed_start_pose(neutral, control, default_rot)
+    where = ", ".join(f"{a}={v:g}" for a, v in fixed.items())
+
+    # IK like the Interbotix arm interface: several initial guesses, wrap to (-pi, pi].
+    waist = np.arctan2(target[1, 3], target[0, 3])
+    guesses = [np.array(NEUTRAL_JOINT_STATE), np.zeros(len(NEUTRAL_JOINT_STATE)),
+               np.concatenate([[waist], np.array(NEUTRAL_JOINT_STATE)[1:]])]
+    solution = None
+    for guess in guesses:
+        theta, ok = mr.IKinSpace(robot.Slist, robot.M, target, guess, 0.001, 0.001)
+        if ok:
+            solution = (np.asarray(theta) + np.pi) % (2 * np.pi) - np.pi
+            break
+    if solution is None:
+        return [_fail(
+            name,
+            f"the start pose for the fixed values ({where}) has no IK solution: the arm cannot reach it",
+            remedy="Change those values in the conf (closer to the neutral pose), or use \"hold\"\n"
+            "instead of a number. Collection would stop at the start of the first trajectory.",
+        )]
+
+    limits = _joint_limits(ctx, arm)
+    if limits is None:
+        return [_warn(name, f"start pose ({where}) is reachable by IK, but the joint limits could not be "
+                      "read from the arm driver, so they were not checked")]
+    names, lower, upper = limits
+    bad = [f"{n} {np.rad2deg(q):.0f} deg (limits {np.rad2deg(lo):.0f}..{np.rad2deg(hi):.0f})"
+           for n, q, lo, hi in zip(names, solution, lower, upper) if not lo - 1e-3 <= q <= hi + 1e-3]
+    if bad:
+        return [_fail(
+            name,
+            f"the start pose for the fixed values ({where}) needs joints beyond their limits: {'; '.join(bad)}",
+            remedy="Change those values in the conf, or use \"hold\" instead of a number.",
+        )]
+    xyz = target[:3, 3]
+    return [_ok(name, f"start pose reachable ({where}): x={xyz[0]:.3f} y={xyz[1]:.3f} z={xyz[2]:.3f} m, "
+                      "within joint limits")]
+
+
+def _joint_limits(ctx: Context, arm: str):
+    """(names, lower, upper) of the arm group from the Interbotix driver, or None."""
+    try:
+        rospy = _rospy(ctx)
+        from interbotix_xs_msgs.srv import RobotInfo
+        srv = f"/{arm}/get_robot_info"
+        rospy.wait_for_service(srv, timeout=5)
+        info = rospy.ServiceProxy(srv, RobotInfo)(cmd_type="group", name="arm")
+        return list(info.joint_names), list(info.joint_lower_limits), list(info.joint_upper_limits)
+    except Exception:
+        return None

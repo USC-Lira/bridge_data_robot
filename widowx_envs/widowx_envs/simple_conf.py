@@ -21,6 +21,7 @@ same ones on the host before anything starts: see ``check_settings``.
 
 import copy
 import difflib
+import math
 import inspect
 import os
 from typing import Dict, List, Optional, Tuple
@@ -120,6 +121,39 @@ def resolve_control(action_mode, control) -> Tuple[Optional[Dict], List[str]]:
         elif axis in ANGLE_AXES and abs(v) > 180:
             errors.append(f"control[{axis!r}] = {v}: degrees, between -180 and 180")
     return (dict(control) if not errors else None), errors
+
+
+# Rough reach of the wx250s, for a quick plain-Python sanity check of fixed
+# positions (the exact check, with the real kinematics and joint limits, is
+# preflight's container.control_start). Base frame: z = 0 at the base plate.
+SHOULDER_HEIGHT_M = 0.11
+MAX_REACH_M = 0.62  # from the shoulder; the wx250s is specified at ~0.65 m
+
+
+def position_errors(control: Dict) -> List[str]:
+    """Fixed x/y/z values that are clearly impossible for the arm."""
+    fixed = {a: control[a] for a in POSITION_AXES
+             if not isinstance(control.get(a), bool) and isinstance(control.get(a), (int, float))}
+    if not fixed:
+        return []
+    errors = []
+    if fixed.get("z", 1.0) < 0:
+        errors.append(f"control['z'] = {fixed['z']} m is below the robot's base (z = 0 is the base plate)")
+    if len(fixed) == 3:
+        x, y, z = fixed["x"], fixed["y"], fixed["z"]
+        reach = math.sqrt(x * x + y * y + (z - SHOULDER_HEIGHT_M) ** 2)
+        if reach > MAX_REACH_M:
+            errors.append(f"fixed position ({x}, {y}, {z}) is {reach:.2f} m from the shoulder; "
+                          f"the arm reaches about {MAX_REACH_M} m")
+    else:
+        # Only some axes fixed: the others come from the neutral pose, which is at
+        # about x=0.12, y=-0.02, z=0.25 (FK of NEUTRAL_JOINT_STATE for the wx250s).
+        x, y, z = fixed.get("x", 0.12), fixed.get("y", -0.02), fixed.get("z", 0.25)
+        reach = math.sqrt(x * x + y * y + (z - SHOULDER_HEIGHT_M) ** 2)
+        if reach > MAX_REACH_M:
+            errors.append(f"fixed {', '.join(f'{a}={v}' for a, v in fixed.items())} puts the start pose "
+                          f"about {reach:.2f} m from the shoulder; the arm reaches about {MAX_REACH_M} m")
+    return errors
 
 
 def describe_control(control: Dict) -> List[str]:
@@ -239,6 +273,7 @@ def check_settings(cameras=None, depth=False, action_mode=None, control=None, me
     resolved, control_errors = resolve_control(action_mode, control)
     errors += control_errors
     if resolved:
+        errors += position_errors(resolved)
         warnings += angle_warnings(resolved)
         if any(isinstance(resolved[a], (int, float)) and not isinstance(resolved[a], bool)
                for a in POSITION_AXES):

@@ -91,6 +91,7 @@ deadline:
 |---|---|
 | `host.repo_root` | running from the wrong directory |
 | `host.conf_settings` | the `--conf` file's `make_config(...)`: `action_mode` / `control` agree (a preset with a `control` dict, `custom` without one, a missing axis, a bad value), known cameras, `depth` only with a RealSense, `task`/`operator` filled in, typos in `env`/`agent`/`collection` overrides. Same rules `make_config` applies when collection starts (`simple_conf.check_settings`) |
+| `container.control_start` | the start pose the arm moves to before each trajectory (neutral, with the conf's fixed x/y/z/roll/pitch/yaw swapped in) has an IK solution and stays within the joint limits the arm driver reports. Checked without moving the arm, with the same pose code the env uses (`control_utils.py`). `host.conf_settings` already rejects clearly impossible values (below the base, beyond ~0.62 m reach) before the container starts |
 | `host.conf_cameras` | which cameras `--conf` records; a conf topic no known camera publishes |
 | `host.docker_cli` | docker / compose v2 plugin missing |
 | `host.docker_permissions` | the `usermod -aG docker` problem from the README |

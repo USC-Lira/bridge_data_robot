@@ -228,50 +228,16 @@ class VR_WidowX(WidowXEnv):
             prev_rj = rj
         return self.current_obs()
 
-    # LIRA: slow move to the conf's fixed axes before recording
-    START_SPEED_M_S = 0.05      # 5 cm/s
-    START_SPEED_RAD_S = 0.5     # ~30 deg/s
-    START_MIN_DURATION_S = 2.0
-
-    def control_start_pose(self, current_pose):
-        """current_pose with the conf's fixed x/y/z/roll/pitch/yaw values swapped in, or None."""
-        import widowx_envs.utils.transformation_utils as tr
-        control = self._hp.control
-        if not control:
-            return None
-        fixed = {a: float(v) for a, v in control.items()
-                 if a != 'gripper' and v not in ('teleop', 'hold')}
-        if not fixed:
-            return None
-        default_rot = self._controller.default_rot
-        rot, xyz = tr.TransToRp(current_pose)
-        xyz = np.array(xyz, dtype=float)
-        for i, axis in enumerate(('x', 'y', 'z')):
-            if axis in fixed:
-                xyz[i] = fixed[axis]
-        if any(a in fixed for a in ('roll', 'pitch', 'yaw')):
-            euler = np.array(tr.rotationMatrixToEulerAngles(rot.dot(default_rot.transpose()),
-                                                            check_error_thresh=1e-5), dtype=float)
-            for i, axis in enumerate(('roll', 'pitch', 'yaw')):
-                if axis in fixed:
-                    euler[i] = np.deg2rad(fixed[axis])
-            rot = tr.eulerAnglesToRotationMatrix(euler).dot(default_rot)
-        return tr.RpToTrans(rot, xyz)
-
-    def control_start_duration(self, current_pose, target_pose):
-        """Seconds for a slow, safe move between two poses."""
-        dist = np.linalg.norm(target_pose[:3, 3] - current_pose[:3, 3])
-        r = current_pose[:3, :3].T.dot(target_pose[:3, :3])
-        angle = np.arccos(np.clip((np.trace(r) - 1) / 2, -1.0, 1.0))
-        return max(self.START_MIN_DURATION_S, dist / self.START_SPEED_M_S, angle / self.START_SPEED_RAD_S)
+    # LIRA: slow move to the conf's fixed axes before recording (see control_utils)
 
     def _move_to_control_start(self):
         """Move slowly to the conf's fixed axes, so recording does not start with a jump."""
+        from widowx_envs.control_utils import fixed_start_pose, start_move_duration
         current = self._controller.get_cartesian_pose(matrix=True)
-        target = self.control_start_pose(current)
+        target = fixed_start_pose(current, self._hp.control, self._controller.default_rot)
         if target is None:
             return
-        duration = self.control_start_duration(current, target)
+        duration = start_move_duration(current, target)
         fixed = ', '.join('{}={}'.format(a, v) for a, v in self._hp.control.items()
                           if a != 'gripper' and v not in ('teleop', 'hold'))
         print('moving slowly to the start pose from the conf ({}) over {:.1f}s...'.format(fixed, duration))
