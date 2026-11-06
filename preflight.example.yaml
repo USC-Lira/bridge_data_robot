@@ -77,6 +77,7 @@ cameras:
     info_topic: /D435/color/camera_info
     serial: '217222067236'
     v4l2_name: Intel(R) RealSense(TM) Depth Ca
+    usb_name: RealSense
   - name: D435_depth
     kind: realsense
     image_topic: /D435/depth/image_rect_raw
