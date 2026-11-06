@@ -870,30 +870,52 @@ def vr_headset(ctx: Context) -> CheckResult:
 # --------------------------------------------------------------------------- #
 
 
+def _create_dataset_root(ctx: Context, root: str, uid: int) -> bool:
+    """One-time: create the data folder, owned by the container user. Needs sudo."""
+    owner = f"{uid}:{os.getgid()}" if os.getuid() == uid else str(uid)
+    print(
+        f"\n[preflight] The data folder {root} does not exist. Creating it once, owned by\n"
+        f"[preflight] {owner} so the container can write to it. This needs sudo; you may\n"
+        "[preflight] be asked for your password.",
+        flush=True,
+    )
+    try:
+        for cmd in (["sudo", "mkdir", "-p", root], ["sudo", "chown", owner, root]):
+            subprocess.run(cmd, check=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[preflight] Could not create it: {exc}", flush=True)
+        return False
+    return True
+
+
 @check("host.dataset_dir", scope="host")
 def dataset_dir(ctx: Context) -> List[CheckResult]:
-    """The host-side dataset directory exists and the container can write to it."""
+    """The data folder (host side of $DATA) exists, the container can write to it, and has space."""
     name = "host.dataset_dir"
     results: List[CheckResult] = []
     cfg = ctx.config
-
-    legacy = os.path.expanduser(cfg.legacy_dataset_root)
+    root = os.path.expanduser(cfg.dataset_root)
     uid, gid = cfg.container_uid, cfg.container_gid
-    if not os.path.isdir(legacy):
-        mkdir = f"mkdir -p {legacy}"
-        if os.getuid() != uid:
-            mkdir += f" && {chown_remedy(legacy, uid)}"
+
+    created = False
+    if not os.path.isdir(root) and ctx.interactive:
+        created = _create_dataset_root(ctx, root, uid)
+    if not os.path.isdir(root):
+        needs_sudo = not os.access(os.path.dirname(root.rstrip("/")) or "/", os.W_OK)
+        mkdir = f"{'sudo ' if needs_sudo else ''}mkdir -p {root}"
+        if needs_sudo or os.getuid() != uid:
+            mkdir += f" && {chown_remedy(root, uid)}"
         results.append(
             _fail(
                 f"{name}.mount",
-                f"{legacy} does not exist (it is the host side of the $DATA mount)",
+                f"{root} does not exist (it is the host side of the $DATA mount)",
                 remedy=f"{mkdir}\n"
                 "Create it BEFORE starting the container: if it is missing, docker creates\n"
                 "it owned by root and the container cannot write to it.",
             )
         )
     else:
-        st = os.stat(legacy)
+        st = os.stat(root)
         ok, via = can_write(st, uid, gid)
         perms = f"{st.st_uid}:{st.st_gid} {stat_mode(st)}"
         if not ok:
@@ -904,45 +926,44 @@ def dataset_dir(ctx: Context) -> List[CheckResult]:
             results.append(
                 _fail(
                     f"{name}.writable",
-                    f"container user {uid}:{gid} cannot write to {legacy} ({perms})",
+                    f"container user {uid}:{gid} cannot write to {root} ({perms})",
                     remedy=hint
                     + "Collection would fail with a permission error only *after* you have\n"
                     "teleoperated a trajectory. Check what is inside first (ls -la), then:\n"
-                    f"  {chown_remedy(legacy, uid)}",
+                    + (f"  chmod u+rwx {root}   (already owned by uid {uid}, just not writable)"
+                       if st.st_uid == uid else f"  {chown_remedy(root, uid)}"),
                 )
             )
         else:
+            note = "created now; " if created else ""
             results.append(
-                _ok(f"{name}.writable", f"{legacy} writable by container user {uid}:{gid} "
-                    f"(as {via}; {perms})")
+                _ok(f"{name}.writable", f"{root} writable by container user {uid}:{gid} "
+                    f"({note}as {via}; {perms})")
             )
 
-        free_gb = shutil.disk_usage(legacy).free / 1e9
+        free_gb = shutil.disk_usage(root).free / 1e9
         if free_gb < cfg.min_free_gb:
             results.append(
                 _fail(
                     f"{name}.free_space",
-                    f"only {free_gb:.1f} GB free, want >= {cfg.min_free_gb:.0f} GB",
+                    f"only {free_gb:.1f} GB free on {root}, want >= {cfg.min_free_gb:.0f} GB",
                     remedy="Upload and clear old sessions before collecting.",
                 )
             )
         else:
-            results.append(_ok(f"{name}.free_space", f"{free_gb:.1f} GB free"))
+            results.append(_ok(f"{name}.free_space", f"{free_gb:.1f} GB free on {root}"))
 
-    # The cross-robot layout from the infrastructure doc. Not wired up yet, so
-    # this is advisory until the unified saver lands.
-    unified = os.path.expanduser(cfg.dataset_root)
-    if not os.path.isdir(unified):
+    # Sessions from before the move to /datasets are left where they are.
+    legacy = os.path.expanduser(cfg.legacy_dataset_root or "")
+    if legacy and os.path.abspath(legacy) != os.path.abspath(root) and os.path.isdir(legacy):
+        try:
+            n = len([e for e in os.listdir(legacy) if not e.startswith(".")])
+        except OSError:
+            n = 0
         results.append(
-            _warn(
-                f"{name}.unified_root",
-                f"{unified} does not exist",
-                remedy=f"The lab-wide layout is {unified}/<task_instruction>/<timestamp>.\n"
-                f"sudo mkdir -p {unified} && {chown_remedy(unified, uid)}",
-            )
+            _ok(f"{name}.legacy", f"older sessions stay in {legacy} ({n} entries, not moved); "
+                f"new data goes to {root}")
         )
-    else:
-        results.append(_ok(f"{name}.unified_root", f"{unified} present"))
     return results
 
 

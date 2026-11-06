@@ -152,8 +152,8 @@ def data_dir(ctx: Context) -> CheckResult:
         return _fail(
             name,
             f"{path} is not a directory",
-            remedy="The $HOME/widowx_data volume in docker-compose.yml is not mounted.\n"
-            "mkdir -p $HOME/widowx_data on the host and restart the container.",
+            remedy=f"The {ctx.config.dataset_root} volume in docker-compose.yml is not mounted.\n"
+            "Re-run preflight on the host (it creates the folder) and restart the container.",
         )
     probe = os.path.join(path, ".preflight_write_test")
     try:
@@ -164,8 +164,8 @@ def data_dir(ctx: Context) -> CheckResult:
         return _fail(
             name,
             f"{path} is not writable: {exc}",
-            remedy="On the host, check what is inside $HOME/widowx_data (ls -la), then give it\n"
-            f"to uid {ctx.config.container_uid}, e.g. sudo chown -R $(id -u):$(id -g) $HOME/widowx_data\n"
+            remedy=f"On the host, check what is inside {ctx.config.dataset_root} (ls -la), then give it\n"
+            f"to uid {ctx.config.container_uid}, e.g. sudo chown -R $(id -u):$(id -g) {ctx.config.dataset_root}\n"
             f"if your login user is uid {ctx.config.container_uid}. Then re-run preflight.",
         )
     return _ok(name, f"{path} writable")

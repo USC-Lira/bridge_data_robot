@@ -61,14 +61,9 @@ Use `--scope host` before the container is up, and `--list` to see all checks. S
 
 First, make sure the `robonet-base` container is running using the above command. Then, run the following commands:
 
+Collected data is written to `/datasets` on the host (`$DATA` in the container, see `docker-compose.yml`). Preflight creates that folder the first time, owned by the container user. Sessions recorded before this live in `$HOME/widowx_data` and were not moved.
+
 ```bash
-# first create an empty directory to store the data
-mkdir -p $HOME/widowx_data
-
-# give sudo write access to the container
-# we can check the id by running `id` in the container
-sudo chown -R 1000:1002 $HOME/widowx_data
-
 # access the container
 docker compose exec robonet bash
 

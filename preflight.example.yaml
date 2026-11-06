@@ -93,9 +93,10 @@ generate_usb_chart: true
 require_vr_headset: true
 
 # --- data -------------------------------------------------------------------- #
-# Lab-wide layout from the infrastructure doc: /datasets/<task>/<timestamp>.
+# Host side of the $DATA mount: where collected data is written (passed to
+# docker compose as DATASET_ROOT).
 dataset_root: /datasets
-# Host side of the $DATA bind mount in docker-compose.yml (where we write today).
+# Where sessions were written before the move to /datasets; left in place.
 legacy_dataset_root: ~/widowx_data
 min_free_gb: 50.0
 # The container writes as this uid:gid; the host directory must match.
