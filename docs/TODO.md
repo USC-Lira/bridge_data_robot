@@ -71,6 +71,15 @@ in `docker-compose.yml`.
       217222067236, expected ..." instead of the driver retrying forever.
 - [ ] Remove `ENV REALSENSE_SERIAL` from `widowx_envs/Dockerfile` at the next
       planned rebuild; `docker-compose.yml` overrides it anyway.
+- [ ] Possible follow-up: support **two RealSense cameras**. Today only one is
+      wired up: `widowx_rs.launch` starts one driver group (`camera1`, one
+      serial), `run.sh`/`docker-compose.yml` pass one `REALSENSE_SERIAL`, and
+      preflight's catalog has one RealSense (it warns when it sees more). Needs
+      a second driver group (`camera2`, `serial_no_camera2`), a
+      `REALSENSE_SERIAL_2`, a second catalog entry, and preflight expecting two.
+      Put them on different USB 3 controllers (colour + depth on two cameras is
+      a lot of bandwidth), and name them by position (`realsense_front`,
+      `realsense_side`) rather than by model.
 
 ## Session metadata
 
