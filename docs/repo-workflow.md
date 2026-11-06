@@ -91,7 +91,7 @@ now should stay untracked (or move into Notion, which is where they belong).
 
 ### 5. Rig-specific values belong in config, not in code
 
-The D435 serial `146322077603`, the `/datasets` root, the arm model — these
+The RealSense serial (`217222067236`, set in `docker-compose.yml`), the `/datasets` root, the arm model — these
 differ per station and will differ per robot as the lab grows. They live in
 `preflight/config.py` and `preflight.example.yaml`.
 
@@ -140,7 +140,7 @@ The Alienware is a shared machine. A few things follow from that:
 - **The checkout at `~/bridge_data_robot` is shared.** Check what branch it is
   on before you start — someone else may have left it on theirs.
 - **`usb_connector_chart.yml` is gitignored and machine-specific.** Never commit
-  it; regenerate it with `./generate_usb_config.sh` when cameras move ports.
+  it; preflight regenerates it on every run (`./generate_usb_config.sh`).
 - **The container mounts `./widowx_envs` live**, so Python edits take effect
   without a rebuild. Only `Dockerfile`/`requirements.txt` changes need
   `docker compose up --build`.

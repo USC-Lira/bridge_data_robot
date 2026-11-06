@@ -7,20 +7,30 @@ or adding a second arm is a config edit rather than a code edit.
 The defaults below describe the LiraLab Alienware WidowX station as of the
 ``conf_jesse.py`` / RealSense D435 configuration. Override them by passing
 ``--config <file>`` (YAML if PyYAML is importable, JSON always).
+
+Cameras come in two lists:
+
+* ``camera_catalog``: every camera the rig *could* have and how to find it
+  (driver, v4l2 name, serial, topics). Written once per rig.
+* ``cameras``: the ones this session needs. When ``--conf`` is given they are
+  picked from the catalog by the topics the experiment conf records (see
+  :func:`select_cameras_from_conf`), so the two never drift apart. Without
+  ``--conf`` the defaults below apply.
 """
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import json
 import os
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclasses.dataclass
 class CameraSpec:
-    """One camera the data collection config expects to be publishing."""
+    """One camera stream: how to find it, and whether this session needs it."""
 
     name: str
     # "realsense" cameras are driven by the realsense2_camera nodelet;
@@ -36,6 +46,10 @@ class CameraSpec:
     # `v4l2-ctl --list-devices`.
     chart_key: Optional[str] = None
     v4l2_name: Optional[str] = None
+    # Substring of the USB product name in /sys/bus/usb/devices/*/product. Used
+    # instead of v4l2 for cameras whose driver claims the USB device directly
+    # (librealsense): while the container runs, they vanish from v4l2-ctl.
+    usb_name: Optional[str] = None
     width: int = 640
     height: int = 480
     required: bool = True
@@ -62,7 +76,14 @@ class PreflightConfig:
 
     # -- cameras ------------------------------------------------------------ #
     cameras: List[CameraSpec] = dataclasses.field(default_factory=list)
+    # Every camera the rig could have. Entries in ``cameras`` are added to it
+    # automatically, so a --config that only lists ``cameras`` still works.
+    camera_catalog: List[CameraSpec] = dataclasses.field(default_factory=list)
     usb_connector_chart: str = "usb_connector_chart.yml"
+    # Re-run generate_usb_config.sh on every preflight so the chart always
+    # matches what is plugged in. Turn off (or pass --no-generate) if you keep
+    # a hand-edited chart.
+    generate_usb_chart: bool = True
 
     # -- teleop ------------------------------------------------------------- #
     # The Meta Quest 2 running the RAIL Oculus Teleoperation app, over adb.
@@ -80,6 +101,9 @@ class PreflightConfig:
 
     # -- container ---------------------------------------------------------- #
     compose_service: str = "robonet"
+    # Image the service runs (docker-compose.yml `image:`), used to decide
+    # whether preflight has to build it before starting the container.
+    compose_image: str = "robonet-base"
     container_env_vars: List[str] = dataclasses.field(
         default_factory=lambda: ["DATA", "EXP", "ROBONETV2_ARM"]
     )
@@ -98,6 +122,12 @@ class PreflightConfig:
         return [c for c in self.cameras if c.kind == "realsense"]
 
     @property
+    def catalog(self) -> List[CameraSpec]:
+        """``camera_catalog`` plus anything in ``cameras`` it does not already have."""
+        known = {c.image_topic for c in self.camera_catalog}
+        return list(self.camera_catalog) + [c for c in self.cameras if c.image_topic not in known]
+
+    @property
     def usb_cameras(self) -> List[CameraSpec]:
         return [c for c in self.cameras if c.kind == "usb"]
 
@@ -105,12 +135,16 @@ class PreflightConfig:
     def from_dict(cls, data: dict) -> "PreflightConfig":
         data = dict(data)
         cams = data.pop("cameras", None)
+        catalog = data.pop("camera_catalog", None)
         unknown = set(data) - {f.name for f in dataclasses.fields(cls)}
         if unknown:
             raise SystemExit(f"Unknown key(s) in preflight config: {', '.join(sorted(unknown))}")
         cfg = cls(**data)
-        if cams is not None:
-            cfg.cameras = [CameraSpec(**c) for c in cams]
+        defaults = default_config()
+        cfg.cameras = [CameraSpec(**c) for c in cams] if cams is not None else defaults.cameras
+        cfg.camera_catalog = (
+            [CameraSpec(**c) for c in catalog] if catalog is not None else defaults.camera_catalog
+        )
         return cfg
 
     @classmethod
@@ -135,36 +169,126 @@ class PreflightConfig:
         return dataclasses.asdict(self)
 
 
+def _d435(name, image_topic, info_topic, v4l2_name=None, usb_name=None) -> CameraSpec:
+    return CameraSpec(
+        name=name,
+        kind="realsense",
+        image_topic=image_topic,
+        info_topic=info_topic,
+        # The RealSense on the Alienware is a D415 (it replaced the D435
+        # 146322077603); the "D435" names and topics are kept for compatibility
+        # with the conf files. Must match REALSENSE_SERIAL in docker-compose.yml.
+        serial="217222067236",
+        v4l2_name=v4l2_name,
+        usb_name=usb_name,
+        width=640,
+        height=480,
+        required=True,
+    )
+
+
+def default_catalog() -> List[CameraSpec]:
+    """Every camera the LiraLab WidowX station has had attached.
+
+    The two Logitechs (blue, yellow) report the same v4l2 name; the usb
+    connector chart is what tells them apart.
+    """
+    return [
+        # Any RealSense model matches ("RealSense" is in the USB product name of
+        # both the D415 and the D435); the serial is what pins the exact unit.
+        _d435("D435", "/D435/color/image_raw", "/D435/color/camera_info",
+              v4l2_name="Intel(R) RealSense(TM) Depth Ca", usb_name="RealSense"),
+        # Same physical device as D435, so no v4l2_name: it is enumerated once.
+        _d435("D435_depth", "/D435/depth/image_rect_raw", "/D435/depth/camera_info"),
+        CameraSpec(name="blue", kind="usb", chart_key="blue", v4l2_name="1080P Pro Stream"),
+        CameraSpec(name="yellow", kind="usb", chart_key="yellow", v4l2_name="1080P Pro Stream"),
+        CameraSpec(name="wrist", kind="usb", chart_key="wrist", v4l2_name="Piwebcam: UVC Camera"),
+    ]
+
+
 def default_config() -> PreflightConfig:
     """The LiraLab WidowX station as currently cabled (RealSense D435 only).
 
-    Matches ``widowx_envs/experiments/bridge_data_v2/conf_jesse.py``: one D435
-    colour stream plus its aligned depth stream, no USB webcams. If you collect
-    with a config that also uses the blue/yellow/wrist Logitechs, add them here
-    (or in a ``--config`` override) so preflight actually checks them.
+    ``cameras`` matches ``conf_jesse.py``: one D435 colour stream plus its
+    aligned depth stream, no USB webcams. It only applies when no ``--conf`` is
+    given; with ``--conf`` the cameras are picked from the catalog instead.
     """
+    catalog = default_catalog()
     return PreflightConfig(
-        cameras=[
-            CameraSpec(
-                name="D435",
-                kind="realsense",
-                image_topic="/D435/color/image_raw",
-                info_topic="/D435/color/camera_info",
-                serial="146322077603",
-                v4l2_name="Intel(R) RealSense(TM) Depth Ca",
-                width=640,
-                height=480,
-                required=True,
-            ),
-            CameraSpec(
-                name="D435_depth",
-                kind="realsense",
-                image_topic="/D435/depth/image_rect_raw",
-                info_topic="/D435/depth/camera_info",
-                serial="146322077603",
-                width=640,
-                height=480,
-                required=True,
-            ),
-        ]
+        cameras=[c for c in catalog if c.name in ("D435", "D435_depth")],
+        camera_catalog=catalog,
     )
+
+
+# --------------------------------------------------------------------------- #
+# experiment conf -> cameras
+# --------------------------------------------------------------------------- #
+
+CONF_TOPIC_KEYS = ("camera_topics", "depth_camera_topics")
+
+
+def read_conf_topics(path: str) -> Dict[str, List[str]]:
+    """The topics a ``conf_*.py`` records, read without executing it.
+
+    The conf files import ROS (``IMTopic``, ``VR_WidowX``), which the host's
+    system python does not have, so this parses the source instead and pulls
+    the first argument (or ``name=``) out of each ``IMTopic(...)`` in the
+    ``camera_topics`` / ``depth_camera_topics`` lists. Commented-out topics are
+    ignored for free. Raises ``ValueError`` if the file cannot be parsed.
+    """
+    with open(path) as f:
+        source = f.read()
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError as exc:
+        raise ValueError(f"syntax error at line {exc.lineno}: {exc.msg}") from exc
+
+    found: Dict[str, List[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if not (isinstance(key, ast.Constant) and key.value in CONF_TOPIC_KEYS):
+                continue
+            if not isinstance(value, (ast.List, ast.Tuple)):
+                continue
+            topics = found.setdefault(key.value, [])
+            for elt in value.elts:
+                topic = _imtopic_name(elt)
+                if topic is not None:
+                    topics.append(topic)
+    return found
+
+
+def _imtopic_name(node) -> Optional[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if not isinstance(node, ast.Call):
+        return None
+    if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+        return node.args[0].value
+    for kw in node.keywords:
+        if kw.arg == "name" and isinstance(kw.value, ast.Constant):
+            return kw.value.value
+    return None
+
+
+def select_cameras_from_conf(
+    config: PreflightConfig, topics: Dict[str, List[str]]
+) -> Tuple[List[CameraSpec], List[str]]:
+    """Pick the catalog cameras whose image topic the conf records.
+
+    Returns ``(cameras, unknown_topics)``. Every selected camera is required:
+    the conf records it, so collection hangs without it.
+    """
+    by_topic = {c.image_topic: c for c in config.catalog}
+    cameras: List[CameraSpec] = []
+    unknown: List[str] = []
+    for key in CONF_TOPIC_KEYS:
+        for topic in topics.get(key, []):
+            spec = by_topic.get(topic)
+            if spec is None:
+                unknown.append(topic)
+            elif spec not in cameras:
+                cameras.append(dataclasses.replace(spec, required=True))
+    return cameras, unknown

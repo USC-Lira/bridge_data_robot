@@ -87,6 +87,8 @@ ENV PYTHONPATH="${PYTHONPATH}:/home/${USER_ID}/interbotix_ws/src/widowx_envs"
 ENV ROBONETV2_ARM=wx250s
 ENV DATA=/home/robonet/trainingdata
 ENV EXP=/home/robonet/experiments
+# LIRA: overridden at run time by REALSENSE_SERIAL in docker-compose.yml (the
+# Alienware now has a D415, 217222067236). Left as is to avoid a rebuild.
 ENV REALSENSE_SERIAL=146322077603
 
 # build interbox ros packages

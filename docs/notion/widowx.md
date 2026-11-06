@@ -16,7 +16,7 @@ Quest 2.
 |---|---|
 | Arm | WidowX 250 6-DOF (`ROBONETV2_ARM=wx250s`) |
 | Desktop | Alienware · login: *see lab password manager* |
-| Cameras | Intel RealSense D435 (serial `146322077603`), colour + depth. Logitech 1080P Pro Stream ×2 and a wrist cam are supported but not in the current config. |
+| Cameras | Intel RealSense D415 (serial `217222067236`, set as `REALSENSE_SERIAL` in `docker-compose.yml`), colour + depth, published under the historical `/D435/...` topic names. It replaced a D435 (`146322077603`). Logitech 1080P Pro Stream ×2 and a wrist cam are supported but not in the current config. |
 | Teleop | Meta Quest 2 + RAIL Oculus Teleoperation app, over USB/adb |
 | Environment | ROS Noetic in docker (`robonet` service) |
 | Data out | `$HOME/widowx_data` on the host ↔ `/home/robonet/trainingdata` in the container |
@@ -27,7 +27,7 @@ Quest 2.
 2. **Arm data** — mini-USB → USB from the arm to the desktop. This is what
    becomes `/dev/ttyDXL`.
 3. **Cameras** — the RealSense D435 over USB (use a USB 3 port). If you move a
-   camera to a different port you **must** re-run `./generate_usb_config.sh`.
+   camera to a different port, re-run preflight (it regenerates the chart).
 4. **Quest 2** (teleop only) — USB-C → USB to the desktop. Leave it plugged in
    during teleop; it both charges and carries the control data.
    1. Turn the headset on.
@@ -54,9 +54,16 @@ state, docker, the dataset directory, and — once the container is up — the R
 side: arm driver, camera topics, live frames, and that the conf file you passed
 declares only topics that are actually publishing.
 
+- If all host checks pass and the container is not running, preflight
+  **starts it** (`docker compose up -d`, building the image only if it is
+  missing or the Dockerfile changed), opens a new terminal window with its
+  output, waits for the arm and cameras, then runs the container checks.
+- It fixes what it can by itself (USB chart, adb, the headset's USB
+  permissions) and **pauses** for what needs you: plugging in the headset,
+  clicking "Allow" inside it.
 - Exit code `0` = clear to collect, `1` = fix the failures first.
 - Every failure prints the command that fixes it.
-- Before the container is running, use `--scope host`.
+- `--no-start` only checks; `--non-interactive` never pauses or asks.
 
 Details and how to add checks: [`docs/preflight.md`](https://github.com/USC-Lira/bridge_data_robot/blob/main/docs/preflight.md)
 
@@ -65,26 +72,24 @@ Details and how to add checks: [`docs/preflight.md`](https://github.com/USC-Lira
 
 ## 3. Data collection
 
-Two terminal windows. Window 1 runs the robot; window 2 runs collection.
-
-### Window 1 — start the robot container
+### Window 1 — preflight starts the robot
 
 ```bash
 cd ~/bridge_data_robot
-
-# only when a camera is new or moved USB ports
-./generate_usb_config.sh
-
-USB_CONNECTOR_CHART=$(pwd)/usb_connector_chart.yml docker compose up --build robonet
+python3 widowx_envs/widowx_envs/preflight/preflight.py \
+    --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
 ```
 
-This builds and runs Ubuntu + ROS + all dependencies, and starts the arm driver
-and camera nodes. **Leave it running.**
+Preflight regenerates `usb_connector_chart.yml`, checks the rig, starts the
+robonet container in the background (Ubuntu + ROS + arm driver + cameras), and
+opens a **"robonet (container output)"** window with its log. Closing that
+window only closes the view; the container keeps running. To get the log back:
+`docker compose logs -f robonet`.
 
-> ⚠️ If you have several cameras connected, check `./usb_connector_chart.yml`
-> before continuing — each camera must have its own non-empty USB path. An
-> empty entry silently binds that topic to the **wrong camera**, and the
-> recorded data looks fine until you inspect it. `preflight.py` fails on this.
+> ⚠️ The two Logitech webcams have the same name, so blue/yellow are assigned
+> by enumeration order. If preflight warns that a topic **now points at a
+> different USB port**, check the images before collecting — blue and yellow
+> may have swapped. The previous chart is kept in `usb_connector_chart.yml.bak`.
 
 > 📷 *Attach: screenshot of healthy roslaunch output.*
 
@@ -126,16 +131,19 @@ Inside the container under `$DATA` (`/home/robonet/trainingdata`), which is
 
 ## 4. Powering off
 
-1. Kill **window 2** first.
-2. Then kill **window 1**.
-3. ⚠️ **Hold the arm while window 1 shuts down** so it does not collapse onto
-   the table.
-4. Power the arm off.
-5. Put the Quest on its charger.
+1. Stop collection in **window 2** first.
+2. Stop the container:
+   ```bash
+   python3 stop_container.py
+   ```
+   It moves the arm to its sleep pose, asks you to confirm, then stops the
+   container. ⚠️ **Hold the arm** anyway: the motors turn off when it stops.
+3. Power the arm off.
+4. Put the Quest on its charger.
 
 ## 5. Inference
 
-With the `robonet` container running (window 1):
+With the `robonet` container running (started by preflight, window 1):
 
 ```bash
 # server
@@ -208,11 +216,12 @@ python examples/02_finetune_on_lira_data.py \
 |---|---|---|
 | `module 'numpy' has no attribute 'typeDict'` | old scipy vs new numpy | `pip install --upgrade scipy` **inside the container** |
 | `Device not found. Run 'adb devices'` at collection start | Quest not connected/authorised | Connect it, accept the in-headset USB prompt. Expected before the headset is attached. |
+| `adb devices` shows `no permissions` | No udev rule for the Quest (USB vendor `2833`), so the user cannot open it | Add `/etc/udev/rules.d/51-oculus.rules` (preflight's `host.vr_headset` prints the exact commands), replug, `adb kill-server` |
 | VR controller does nothing | RAIL Oculus Teleoperation app not running, or guardian not drawn | Open the app in the headset, redraw boundaries |
 | `No RealSense devices were found!` | D435 not enumerated, wrong serial in `widowx_rs.launch`, or the D435 is **also** listed in `usb_connector_chart.yml` so two drivers fight over it | Replug (USB 3), check the serial, remove the D435 line from the chart |
 | `PermissionError: [Errno 13]` from docker | user not in the `docker` group | `sudo groupadd docker; sudo usermod -aG docker $USER`, then **reboot** |
 | Collection hangs with no error at startup | `CameraRecorder` waiting forever on a `camera_info` topic that does not exist | `rostopic list \| grep camera_info`; set `info_name` explicitly on the `IMTopic` |
-| Data recorded from the wrong camera | empty/duplicate entry in `usb_connector_chart.yml` | `./generate_usb_config.sh` with all cameras plugged in; run preflight |
+| Data recorded from the wrong camera | empty/duplicate entry in `usb_connector_chart.yml` | Plug in all cameras and run preflight (it regenerates the chart) |
 | Permission error when saving, after teleoperating | `$HOME/widowx_data` owned by the wrong uid | `sudo chown -R 1000:1002 $HOME/widowx_data` |
 | Arm driver fails to start | mini-USB unplugged, arm unpowered, or missing udev rule | check cable + power; `ls /dev/ttyDXL` |
 

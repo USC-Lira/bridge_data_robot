@@ -19,52 +19,74 @@ arm_serial_port: /dev/ttyDXL
 arm_joint_states_topic: /wx250s/joint_states
 
 # --- cameras ---------------------------------------------------------------- #
-# One entry per camera the experiment config expects. Must stay in sync with
-# the `camera_topics` / `depth_camera_topics` in
-# widowx_envs/experiments/bridge_data_v2/conf_*.py.
+# camera_catalog: every camera this rig can have, and how to find it. Written
+# once per rig. When you pass --conf, preflight reads the IMTopic(...) entries
+# in that conf's camera_topics / depth_camera_topics and requires exactly the
+# catalog cameras whose image_topic matches - so there is nothing to keep in
+# sync with conf_*.py. A conf topic that matches no catalog entry is a failure.
 #
 #   kind: realsense  -> driven by the realsense2_camera nodelet (widowx_rs.launch)
-#   kind: usb        -> driven by multicam_server via usb_connector_chart.yml
+#   kind: usb        -> driven by multicam_server via usb_connector_chart.yml;
+#                       chart_key is its key there (and its topic name)
+#   v4l2_name        -> substring identifying it in `v4l2-ctl --list-devices`
+#   usb_name         -> substring of its USB product name (/sys/bus/usb/devices),
+#                       for cameras whose driver hides them from v4l2
+camera_catalog:
+  - name: D435
+    kind: realsense
+    image_topic: /D435/color/image_raw
+    info_topic: /D435/color/camera_info
+    serial: '217222067236'          # the D415; must match REALSENSE_SERIAL in docker-compose.yml
+    v4l2_name: Intel(R) RealSense(TM) Depth Ca
+    # Found by USB product name, not v4l2: while the container runs, librealsense
+    # holds the camera and it disappears from v4l2-ctl. Matches any RealSense
+    # (D415, D435, ...); REALSENSE_SERIAL in docker-compose.yml picks the unit.
+    usb_name: RealSense
+    width: 640
+    height: 480
+
+  - name: D435_depth                # same device as D435, so no v4l2_name
+    kind: realsense
+    image_topic: /D435/depth/image_rect_raw
+    info_topic: /D435/depth/camera_info
+    serial: '217222067236'
+    width: 640
+    height: 480
+
+  - name: blue
+    kind: usb
+    chart_key: blue
+    v4l2_name: 1080P Pro Stream     # same model as yellow; the chart tells them apart
+
+  - name: yellow
+    kind: usb
+    chart_key: yellow
+    v4l2_name: 1080P Pro Stream
+
+  - name: wrist
+    kind: usb
+    chart_key: wrist
+    v4l2_name: 'Piwebcam: UVC Camera'
+
+# cameras: what to expect when no --conf is given (names from the catalog
+# above, with the same fields). Ignored when --conf is given.
 cameras:
   - name: D435
     kind: realsense
     image_topic: /D435/color/image_raw
     info_topic: /D435/color/camera_info
-    serial: '146322077603'          # must match serial_no_camera1 in widowx_rs.launch
+    serial: '217222067236'
     v4l2_name: Intel(R) RealSense(TM) Depth Ca
-    width: 640
-    height: 480
-    required: true
-
+    usb_name: RealSense
   - name: D435_depth
     kind: realsense
     image_topic: /D435/depth/image_rect_raw
     info_topic: /D435/depth/camera_info
-    serial: '146322077603'
-    width: 640
-    height: 480
-    required: true
-
-  # Uncomment if you collect with the fixed Logitech cameras as well. The
-  # chart_key is the key in usb_connector_chart.yml, which is also what the
-  # topic gets named; v4l2_name is the substring that identifies the camera in
-  # `v4l2-ctl --list-devices`.
-  #
-  # - name: blue
-  #   kind: usb
-  #   chart_key: blue
-  #   v4l2_name: 1080P Pro Stream
-  #   image_topic: /blue/image_raw
-  #   required: true
-  #
-  # - name: wrist
-  #   kind: usb
-  #   chart_key: wrist
-  #   v4l2_name: 'Piwebcam: UVC Camera'
-  #   image_topic: /wrist/image_raw
-  #   required: false
+    serial: '217222067236'
 
 usb_connector_chart: usb_connector_chart.yml
+# Re-run generate_usb_config.sh on every preflight (same as omitting --no-generate).
+generate_usb_chart: true
 
 # --- teleop ------------------------------------------------------------------ #
 # Set false for scripted/inference sessions that do not need the Quest.

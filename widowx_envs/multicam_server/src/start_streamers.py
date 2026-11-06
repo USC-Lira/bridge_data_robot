@@ -23,7 +23,10 @@ def load_connector_chart():
         rospy.logerr(f"The usb connector chart in path {config_path} does not exist. You can use the example usb_connector_chart_example.yml as a template.")
         rospy.logerr("you can find the usb outlets of the webcams by running $v4l2-ctl --list-devices")
         exit(1)
-    return yaml.load(open(config_path, 'r'), Loader=yaml.CLoader)
+    # An empty file (or the /dev/null that docker-compose mounts when
+    # USB_CONNECTOR_CHART is unset) loads as None: treat it as "no webcams".
+    with open(config_path, 'r') as f:
+        return yaml.load(f, Loader=yaml.CLoader) or {}
 
 
 def get_dev(output_string, usb_id):

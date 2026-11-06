@@ -16,6 +16,8 @@ import importlib
 import importlib.util
 import json
 import os
+import sys
+import traceback
 from typing import List
 
 from widowx_envs.preflight.core import CheckResult, Context, Status, check
@@ -82,6 +84,23 @@ def container_env(ctx: Context) -> CheckResult:
     return _ok(name, ", ".join(f"{v}={os.environ[v]}" for v in ctx.config.container_env_vars))
 
 
+def _culprit_package(exc: BaseException) -> str:
+    """The installed package the failing line lives in, if any.
+
+    Walks the traceback for the deepest frame under site-/dist-packages, so a
+    TypeError raised inside e.g. gym is reported as "gym", not as our import.
+    """
+    culprit = ""
+    tb = exc.__traceback__
+    while tb is not None:
+        path = tb.tb_frame.f_code.co_filename
+        for marker in ("site-packages/", "dist-packages/"):
+            if marker in path:
+                culprit = path.split(marker, 1)[1].split("/", 1)[0]
+        tb = tb.tb_next
+    return culprit.split(".py")[0]
+
+
 @check("container.python_env", scope="container")
 def python_env(ctx: Context) -> List[CheckResult]:
     """The modules run_data_collection.py imports are importable."""
@@ -92,6 +111,7 @@ def python_env(ctx: Context) -> List[CheckResult]:
             importlib.import_module(mod)
         except Exception as exc:
             remedy = ""
+            culprit = _culprit_package(exc)
             if "typeDict" in str(exc):
                 remedy = (
                     "Known issue: old scipy against new numpy. Inside the container run\n"
@@ -99,11 +119,21 @@ def python_env(ctx: Context) -> List[CheckResult]:
                 )
             elif mod == "oculus_reader":
                 remedy = "pip install git+https://github.com/rail-berkeley/oculus_reader.git"
+            elif isinstance(exc, TypeError) and "not subscriptable" in str(exc) and culprit:
+                py = f"{sys.version_info.major}.{sys.version_info.minor}"
+                remedy = (
+                    f"'{culprit}' uses syntax newer than this container's Python {py} (e.g.\n"
+                    f"list[str]). The installed version dropped {py} support without saying so.\n"
+                    f"Pin an older {culprit} in widowx_envs/requirements.txt and rebuild\n"
+                    f"(preflight --build). Check what is installed: pip show {culprit}"
+                )
+            tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
             results.append(
                 _fail(
                     f"container.python_env.{mod}",
-                    f"{type(exc).__name__}: {exc}",
-                    remedy=remedy,
+                    f"{type(exc).__name__}: {exc}" + (f" (in {culprit})" if culprit else ""),
+                    remedy=remedy or "Traceback tail:\n" + "".join(tb[-4:]).rstrip(),
+                    traceback="".join(tb),
                 )
             )
         else:
@@ -134,8 +164,9 @@ def data_dir(ctx: Context) -> CheckResult:
         return _fail(
             name,
             f"{path} is not writable: {exc}",
-            remedy="On the host: sudo chown -R "
-            f"{ctx.config.container_uid}:{ctx.config.container_gid} $HOME/widowx_data",
+            remedy="On the host, check what is inside $HOME/widowx_data (ls -la), then give it\n"
+            f"to uid {ctx.config.container_uid}, e.g. sudo chown -R $(id -u):$(id -g) $HOME/widowx_data\n"
+            f"if your login user is uid {ctx.config.container_uid}. Then re-run preflight.",
         )
     return _ok(name, f"{path} writable")
 

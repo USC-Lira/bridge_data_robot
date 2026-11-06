@@ -90,14 +90,15 @@ deadline:
 | name | catches |
 |---|---|
 | `host.repo_root` | running from the wrong directory |
+| `host.conf_cameras` | which cameras `--conf` records; a conf topic no known camera publishes |
 | `host.docker_cli` | docker / compose v2 plugin missing |
 | `host.docker_permissions` | the `usermod -aG docker` problem from the README |
 | `host.nvidia_runtime` | `runtime: nvidia` in compose will fail |
 | `host.arm_serial_port` | `/dev/ttyDXL` absent (cable/power/udev) or not writable |
-| `host.v4l2_devices` | a camera is not enumerated at all |
+| `host.v4l2_devices` | a camera is not connected. Webcams are looked up in `v4l2-ctl`; the RealSense by USB product name in `/sys/bus/usb/devices`, because while the container runs librealsense holds it and it is missing from `v4l2-ctl`. Any RealSense model counts (the serial in `docker-compose.yml` picks the unit); warns if it is on a USB 2 link |
 | `host.usb_connector_chart` | see below — the big one |
 | `host.vr_headset` | no adb device, or `unauthorized` instead of `device` |
-| `host.dataset_dir` | `$HOME/widowx_data` missing, wrong owner, or nearly full |
+| `host.dataset_dir` | `$HOME/widowx_data` missing, not writable by the container user (predicted from permission bits; `container.data_dir` does a real write), or nearly full |
 | `host.robonet_container` | window 1 was never started |
 
 ### Container
@@ -134,8 +135,8 @@ def get_dev(output_string, usb_id):
             return re.search('video(\d+)', lines[i + 1]).group(1)
 ```
 
-`generate_usb_config.sh` writes an empty value for every camera that was not
-plugged in when it ran:
+`generate_usb_config.sh` used to write an empty value for every camera that was
+not plugged in when it ran:
 
 ```yaml
 blue: ''
@@ -147,8 +148,24 @@ wrist: 'usb-0000:00:14.0-2'
 It does not crash. It does not warn. It publishes some other camera's frames on
 `/blue/image_raw`, and you find out weeks later when the dataset looks wrong.
 
-So the chart check is fan-out, and hard-fails on: empty values, duplicate
-values, values matching zero devices, and values matching more than one. It
+The script now writes only the cameras it finds (and `{}` when there are none,
+because an empty file loads as `None` and crashed `start_streamers.py`). It
+no longer writes the RealSense, which the RealSense nodelet already drives.
+
+**Preflight regenerates the chart on every run** (`host.usb_connector_chart.generate`),
+so nobody has to remember the script. It writes to a temp file, compares with
+the existing chart, and only replaces it if something changed, keeping the old
+one as `usb_connector_chart.yml.bak`. Because both Logitechs report the same
+v4l2 name, the script tells blue from yellow only by enumeration order; if an
+existing topic now points at a different USB path, that is a **warning** listing
+old -> new, since it may mean blue and yellow swapped. Pass `--no-generate` (or
+set `generate_usb_chart: false`) to check a hand-edited chart as it is.
+
+Then the chart check fans out: one PASS row per topic showing the camera and
+`/dev/video*` node it binds to, and hard-fails on: empty values, duplicate
+values, values matching zero devices, values matching more than one, and a
+required `kind: usb` camera from the config missing from the chart. No webcams
+at all is a PASS when the config expects none (the default D435-only rig). It
 also warns when a RealSense appears in the chart, since `widowx_rs.launch`
 already starts `realsense2_camera` for it and two drivers contending for one
 `/dev/video*` node is a plausible cause of the `No RealSense devices were
@@ -158,12 +175,35 @@ code, not something I have reproduced — verify at the rig.)*
 ## Configuration
 
 Expectations live in `config.py` (`PreflightConfig`, `CameraSpec`), not in the
-check bodies, so re-cabling the rig is a config edit. Defaults describe the
-current station: D435 colour + depth, no webcams, matching `conf_jesse.py`.
-Override with `--config preflight.yaml`; see `preflight.example.yaml`.
+check bodies, so re-cabling the rig is a config edit. Override with
+`--config preflight.yaml`; see `preflight.example.yaml`.
 
-**Keep `cameras:` in sync with whichever `conf_*.py` you collect with** — or
-better, just pass `--conf`, which validates the real thing.
+There are two configs because they answer different questions:
+
+- the **experiment conf** (`conf_*.py`) says *what to record*. It imports ROS,
+  so the host cannot import it.
+- the **preflight config** says *what the rig is*: arm port, dataset root,
+  container uid, and a `camera_catalog` of every camera the rig can have with
+  how to find it (driver, v4l2 name, RealSense serial, topics).
+
+Which cameras a session needs comes from the conf, not from preflight. With
+`--conf`, `host.conf_cameras` reads the conf's source with `ast` (no ROS, no
+execution), takes the `IMTopic('...')` entries in `camera_topics` /
+`depth_camera_topics`, and requires exactly the catalog cameras with those
+image topics. Commented-out topics are ignored; a topic with no catalog entry
+fails. The selection is handed to the container side too, so
+`container.camera_topics` checks the same set. Without `--conf`, the
+`cameras:` defaults apply (D435 colour + depth, matching `conf_jesse.py`).
+
+A camera that is connected but **not** recorded by the conf is a warning, not a
+failure: it still streams (the chart lists every connected webcam, so the chart
+does not change with the conf), but `run_data_collection.py` records only the
+conf's topics, so it will not be in the dataset. The warning is there for the
+"plugged it in, forgot to add it to the conf" case. Without `--conf` there is no
+way to know what will be recorded, so extra cameras are only listed.
+
+Topics built in a loop or imported from another module are invisible to the
+`ast` reader; `host.conf_cameras` warns and falls back to the defaults.
 
 ## Usage
 
@@ -174,7 +214,13 @@ cd ~/bridge_data_robot
 python3 widowx_envs/widowx_envs/preflight/preflight.py \
     --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
 
-# host only — before starting the robonet container
+# check only, never start the container
+python3 widowx_envs/widowx_envs/preflight/preflight.py --no-start
+
+# force an image rebuild before starting
+python3 widowx_envs/widowx_envs/preflight/preflight.py --build --conf ...
+
+# host only
 python3 widowx_envs/widowx_envs/preflight/preflight.py --scope host
 
 # one check while you debug it
@@ -188,6 +234,30 @@ python3 widowx_envs/widowx_envs/preflight/preflight.py --list
 
 Exit codes: `0` clear (possibly with warnings), `1` at least one blocking
 failure, `2` preflight could not run.
+
+## Starting the container
+
+With the default `--scope all`, preflight brings the session up instead of
+only reporting on it (`session.py`):
+
+1. Host checks run. If any FAILs, the container is **not** started.
+2. If `robonet` is not running: build the image only if it does not exist or
+   `widowx_envs/Dockerfile` / `requirements.txt` changed since preflight last
+   built it (`--build` forces it; the code is mounted, so nothing else needs a
+   rebuild), then `docker compose up -d`. The container runs detached, and a
+   new terminal window shows `docker compose logs -f robonet`, so closing the
+   window never stops the arm driver.
+3. Wait (up to 120 s) for the arm and every expected camera topic.
+4. Run the container checks.
+
+A running container is **never stopped without asking**: stopping the arm
+driver drops the arm. If the chart changed while one was running, preflight
+asks whether to move the arm to its sleep pose and restart it.
+`python3 stop_container.py` (repo root) does the same on its own.
+
+Interactive steps (headset "Allow" prompt, sudo for the one-time udev rule,
+restart confirmation) only happen in a terminal; with `--json`,
+`--non-interactive`, or no TTY, preflight reports instead of waiting.
 
 ## Adding a check
 

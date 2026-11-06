@@ -1,0 +1,122 @@
+# TODO
+
+Open work on the WidowX stack that is agreed but not done yet. Add an entry
+when you defer something; delete it in the PR that finishes it.
+
+## Move collected data to `/datasets`
+
+**Today:** everything is saved under the host's `~/widowx_data`
+(`/home/liralab-widowx/widowx_data`), whether or not `/datasets` exists:
+
+1. `run_data_collection.py` saves to
+   `$DATA/<project_key>/<subpath>/<save_dir_prefix>`
+   ([run_data_collection.py:85](../widowx_envs/widowx_envs/run_data_collection.py#L85)).
+2. In the container `$DATA=/home/robonet/trainingdata` (`ENV DATA` in
+   `widowx_envs/Dockerfile`).
+3. `docker-compose.yml` mounts `$HOME/widowx_data:/home/robonet/trainingdata`.
+
+**Target:** the lab-wide layout from the infrastructure doc,
+`/datasets/<task_instruction>/<timestamp>`, the same on every robot.
+
+### Step 1: change where data is saved (small)
+
+- [ ] Create `/datasets` on the Alienware, writable by the container user
+      (uid 1000):
+      `sudo mkdir -p /datasets && sudo chown -R 1000:1000 /datasets`
+- [ ] In `docker-compose.yml`, change the mount to
+      `- /datasets:/home/robonet/trainingdata`.
+- [ ] Point preflight at it: `legacy_dataset_root: /datasets` in the preflight
+      config (`widowx_envs/widowx_envs/preflight/config.py` and
+      `preflight.example.yaml`), so `host.dataset_dir.writable` and
+      `free_space` check the folder that is actually used.
+- [ ] Decide what happens to the existing sessions in `~/widowx_data`: move
+      them into `/datasets`, or leave them and note where they are.
+- [ ] Update the data-transfer notes in the data collection guide, which
+      say files end up in `$HOME/widowx_data`.
+
+The folder layout under `$DATA` is unchanged by this step, still
+`<project_key>/<subpath>/...`.
+
+### Step 2: the unified layout (bigger, needs a group decision)
+
+- [ ] Save as `/datasets/<task_instruction>/<timestamp>` instead of
+      `<project_key>/<subpath>/<prefix>`. This changes the save path logic in
+      `run_data_collection.py`, and is the "unified trajectory saver" from the
+      infrastructure doc.
+- [ ] Settle first whether that saver is one shared package used by every
+      robot repo, rather than a WidowX-only change (see "Where new shared code
+      goes" in [repo-workflow.md](repo-workflow.md)).
+
+### Preflight in the meantime
+
+- [ ] `host.dataset_dir.unified_root` warns on every run that `/datasets` does
+      not exist, although nothing uses it yet. Turn it into a PASS-level note
+      ("not used yet: data goes to ~/widowx_data") until step 1 lands, then
+      make it a real check, and drop the separate `legacy_dataset_root` once
+      there is only one data folder.
+
+## Make the docker build reproducible
+
+The Noetic end-of-life break (rosdep skipping Noetic, so `dynamixel_sdk` was
+never installed) went unnoticed because the Interbotix install script hides
+its own failures. Remaining risks of the same kind:
+
+- [ ] The Interbotix script clones `interbotix_ros_core` and
+      `interbotix_ros_toolboxes` at their latest commit (only
+      `interbotix_ros_manipulators` is checked out to `noetic`). Pin all three
+      to known-good commits.
+- [ ] The ROS apt key added in `widowx_envs/Dockerfile`
+      (`C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654`) was rotated in 2025. A
+      build without cache may fail at the ROS apt steps with `EXPKEYSIG`;
+      switch to the `ros-apt-source` package from the ROS install docs.
+- [ ] Pin every package in `widowx_envs/requirements.txt` to the versions that
+      work today (`pip freeze` inside a working container). Almost nothing is
+      pinned, so each rebuild installs the newest versions, and packages that
+      quietly drop Python 3.8 (the container's version) break the import of
+      `widowx_envs.widowx_env`. So far: `moviepy` (pinned to 1.0.3) and `scipy`
+      (1.10.x, because the venv also sees Ubuntu's old system scipy).
+- [ ] The Interbotix script has no `set -e`, so any failure inside it is
+      invisible. Consider running it with `bash -e`, or replacing it with the
+      few steps we actually need.
+
+## RealSense naming and identity
+
+The Alienware's RealSense is now a **D415** (`217222067236`), which replaced
+the D435 (`146322077603`). Its serial is set in one place, `REALSENSE_SERIAL`
+in `docker-compose.yml`.
+
+- [ ] Its topics are still `/D435/...`, and preflight's catalog calls it `D435`,
+      because `conf_*.py` files and existing datasets use that name. Decide
+      whether to rename it to something model-neutral (e.g. `/realsense/...`),
+      and update the conf files at the same time.
+- [ ] Add a preflight check that compares the serial the RealSense driver
+      reports with the expected one, so a camera swap fails with "found D415
+      217222067236, expected ..." instead of the driver retrying forever.
+- [ ] Remove `ENV REALSENSE_SERIAL` from `widowx_envs/Dockerfile` at the next
+      planned rebuild; `docker-compose.yml` overrides it anyway.
+
+## Session metadata
+
+`run_data_collection.py` copies
+`widowx_envs/experiments/bridge_data_v2/collection_metadata.json` into every
+session's data folder, adding only `date_time`. The file is `{}`, so sessions
+record nothing about who collected them, what the task was, or the setup.
+Preflight warns about it (`container.collection_config.collection_metadata`).
+
+- [ ] Decide as a team which fields every session must record. Candidates:
+      task, operator, scene/objects, camera model and serial (the topics say
+      `/D435` but the camera is a D415), robot and gripper.
+- [ ] Fill `collection_metadata.json` with that template.
+- [ ] Make preflight check that the required fields are filled in, not just
+      that the file is non-empty.
+- [ ] Optionally have preflight fill in what it already knows (camera serial
+      from `docker-compose.yml`, robot model from its config), so people only
+      type the task and their name.
+
+## VR headset
+
+- [ ] The container has its own adb key (lost when the container is
+      recreated). If the container starts the adb server before the host does,
+      the headset asks for "Allow" again. Preflight starts it on the host first,
+      which avoids this in the normal flow; mounting the host's `~/.android`
+      into the container in `docker-compose.yml` would rule it out.

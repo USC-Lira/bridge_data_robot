@@ -116,10 +116,13 @@ def registered_checks(scope: Optional[str] = None) -> List[Check]:
 class Context:
     """Everything a check needs: the expected setup, plus shell helpers."""
 
-    def __init__(self, config, repo_root: str, verbose: bool = False):
+    def __init__(self, config, repo_root: str, verbose: bool = False, interactive: bool = False):
         self.config = config
         self.repo_root = repo_root
         self.verbose = verbose
+        # True only when a person is at the terminal: checks may then pause to
+        # ask them to do something (e.g. click "Allow" in the VR headset).
+        self.interactive = interactive
         # Checks can stash parsed artifacts here for later checks to reuse
         # (e.g. the parsed usb connector chart, the `rostopic list` output).
         self.cache: dict = {}
@@ -151,6 +154,34 @@ class Context:
 
     def have(self, binary: str) -> bool:
         return shutil.which(binary) is not None
+
+    # -- talking to the person at the terminal ------------------------------ #
+
+    def ask(self, question: str, default: bool = False, yes_no: bool = True) -> bool:
+        """Ask a yes/no question (or just wait for Enter when ``yes_no`` is False).
+
+        Never blocks when not interactive: returns ``default`` straight away.
+        """
+        if not self.interactive:
+            return default
+        suffix = (" [Y/n] " if default else " [y/N] ") if yes_no else " "
+        try:
+            answer = input(question + suffix).strip().lower()
+        except EOFError:
+            return default
+        if not yes_no or not answer:
+            return default
+        return answer in ("y", "yes")
+
+    def pause(self, message: str) -> str:
+        """Show ``message`` and wait. Returns 's' if the person wants to skip."""
+        if not self.interactive:
+            return "s"
+        try:
+            answer = input(message + " [Enter = done, s = skip] ").strip().lower()
+        except EOFError:
+            return "s"
+        return "s" if answer.startswith("s") else ""
 
 
 # --------------------------------------------------------------------------- #

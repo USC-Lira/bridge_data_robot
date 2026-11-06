@@ -11,6 +11,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
+import subprocess
+import time
 from typing import Dict, List, Tuple
 
 from widowx_envs.preflight.core import CheckResult, Context, Status, check
@@ -37,6 +40,58 @@ def _skip(name, summary) -> CheckResult:
     return CheckResult(name, Status.SKIP, summary)
 
 
+def _session_conf(ctx: Context) -> str:
+    """Basename of the --conf file if the cameras were taken from it, else ''.
+
+    Only then do we know what will be recorded, and can warn about cameras
+    that are connected but not recorded.
+    """
+    sel = ctx.cache.get("conf_selection") or {}
+    if "cameras" not in sel:
+        return ""
+    return os.path.basename(ctx.cache.get("conf_file", ""))
+
+
+def _unrecorded_remedy(conf: str, topic: str) -> str:
+    return (
+        f"It still streams, but nothing records it: run_data_collection.py records only\n"
+        f"the topics listed in {conf}. If you wanted it in the dataset, add\n"
+        f"IMTopic('{topic}') to camera_topics there. Otherwise unplug it or ignore this."
+    )
+
+
+def can_write(st: os.stat_result, uid: int, gid: int) -> Tuple[bool, str]:
+    """Whether ``uid``/``gid`` may create files in the directory ``st`` describes.
+
+    Applies the POSIX rule: the owner bits apply if the uid matches, else the
+    group bits if the gid matches, else the "other" bits - and creating a file
+    needs both w and x. Supplementary groups and ACLs are not considered, so
+    this is a prediction; ``container.data_dir`` does the real write test.
+    """
+    if st.st_uid == uid:
+        bits, via = (st.st_mode >> 6) & 0o7, "owner"
+    elif st.st_gid == gid:
+        bits, via = (st.st_mode >> 3) & 0o7, "group"
+    else:
+        bits, via = st.st_mode & 0o7, "other"
+    return (bits & 0o3) == 0o3, via
+
+
+def stat_mode(st: os.stat_result) -> str:
+    return stat.filemode(st.st_mode)
+
+
+def chown_remedy(path: str, uid: int) -> str:
+    """The smallest chown that lets the container's uid write to ``path``.
+
+    If the person running preflight has the container's uid (the usual case on
+    the robot desktop), give the directory to them, so both sides can write.
+    """
+    if os.getuid() == uid:
+        return f"sudo chown -R {uid}:{os.getgid()} {path}"
+    return f"sudo chown -R {uid} {path}"
+
+
 def parse_flat_yaml(text: str) -> Dict[str, str]:
     """Parse the ``key: 'value'`` subset of YAML that the connector chart uses.
 
@@ -50,6 +105,44 @@ def parse_flat_yaml(text: str) -> Dict[str, str]:
             continue
         key, _, value = line.partition(":")
         out[key.strip()] = value.strip().strip("'\"")
+    return out
+
+
+SYS_USB_DEVICES = "/sys/bus/usb/devices"
+
+
+def list_usb_devices(root: str = "") -> List[Dict[str, str]]:
+    """Every USB device the kernel sees, read from sysfs (no tools needed).
+
+    Unlike v4l2-ctl, this still lists a camera while a driver such as
+    librealsense has claimed it. ``port`` is the sysfs name (e.g. ``2-8``),
+    which is also the "port number" realsense2_camera logs.
+    """
+    root = root or SYS_USB_DEVICES
+    out: List[Dict[str, str]] = []
+    if not os.path.isdir(root):
+        return out
+
+    def read(d, f):
+        try:
+            with open(os.path.join(d, f)) as fh:
+                return fh.read().strip()
+        except OSError:
+            return ""
+
+    for entry in sorted(os.listdir(root)):
+        d = os.path.join(root, entry)
+        if not os.path.exists(os.path.join(d, "idVendor")):
+            continue  # interfaces (2-8:1.0) and root hubs' sub-entries
+        out.append(
+            {
+                "port": entry,
+                "vendor": read(d, "idVendor"),
+                "product_id": read(d, "idProduct"),
+                "product": read(d, "product"),
+                "speed": read(d, "speed"),  # Mb/s: 480 = USB 2, 5000+ = USB 3
+            }
+        )
     return out
 
 
@@ -182,47 +275,284 @@ def arm_serial_port(ctx: Context) -> CheckResult:
 # --------------------------------------------------------------------------- #
 
 
-@check("host.v4l2_devices", scope="host")
-def v4l2_devices(ctx: Context) -> CheckResult:
-    """Every camera the collection config expects is enumerated by v4l2."""
-    if not ctx.have("v4l2-ctl"):
-        return _warn(
-            "host.v4l2_devices",
-            "v4l2-ctl not installed on the host; cannot enumerate cameras",
-            remedy="sudo apt install v4l-utils (the container has it, the host needs it too\n"
-            "because generate_usb_config.sh runs on the host).",
-        )
-    rc, out, err = ctx.run(["v4l2-ctl", "--list-devices"])
-    # v4l2-ctl exits non-zero when some node can't be opened but still lists the
-    # rest, so trust the output rather than the return code.
-    blocks = parse_v4l2_devices(out)
-    ctx.cache["v4l2_output"] = out
-    ctx.cache["v4l2_blocks"] = blocks
-    if not blocks:
-        return _fail(
-            "host.v4l2_devices",
-            "no video devices found",
-            remedy="Check that the cameras are plugged in. Unplug/replug and re-run.",
-            stderr=err.strip(),
-        )
+@check("host.conf_cameras", scope="host")
+def conf_cameras(ctx: Context) -> List[CheckResult]:
+    """The cameras this session needs, read from the --conf experiment file."""
+    name = "host.conf_cameras"
+    sel = ctx.cache.get("conf_selection")
+    defaults = ", ".join(c.name for c in ctx.config.cameras) or "none"
+    if sel is None:
+        return [
+            _ok(
+                name,
+                f"no --conf given; expecting the default cameras: {defaults}",
+            )
+        ]
+    conf = os.path.basename(ctx.cache.get("conf_file", ""))
+    if "error" in sel:
+        return [
+            _fail(
+                name,
+                sel["error"],
+                remedy="run_data_collection.py would fail to load it too. Fix the file, then re-run.",
+            )
+        ]
+    if sel.get("empty"):
+        return [
+            _warn(
+                name,
+                f"no IMTopic(...) found in camera_topics / depth_camera_topics of {conf}; "
+                f"expecting the default cameras: {defaults}",
+                remedy="Preflight reads the conf without running it, so topics built in a loop or\n"
+                "imported from elsewhere are invisible to it. Write them as literal\n"
+                "IMTopic('/topic') entries, or describe the cameras with --config.",
+            )
+        ]
 
-    expected = [c for c in ctx.config.cameras if c.v4l2_name]
-    missing = [c.name for c in expected if not any(c.v4l2_name in h for h, _ in blocks)]
-    found = [h for h, _ in blocks]
-    if missing:
-        return _fail(
-            "host.v4l2_devices",
-            f"camera(s) not enumerated: {', '.join(missing)}",
-            remedy="Replug the camera(s). If you moved a camera to a different USB port you\n"
-            "must re-run ./generate_usb_config.sh afterwards.",
-            found=found,
+    by_name = {c.name: c for c in ctx.config.cameras}
+    listing = ", ".join(f"{n} ({by_name[n].image_topic})" for n in sel["cameras"]) or "none"
+    results = [_ok(name, f"{conf} records: {listing}")]
+    for topic in sel["unknown"]:
+        results.append(
+            _fail(
+                f"{name}.unknown",
+                f"{conf} records {topic}, but no camera in the catalog publishes it",
+                remedy="A typo in the conf, or a camera preflight does not know about. For a new\n"
+                "camera, add it under camera_catalog in a --config file (see\n"
+                "preflight.example.yaml).",
+                topic=topic,
+            )
         )
-    return _ok("host.v4l2_devices", f"{len(blocks)} video device(s) enumerated", found=found)
+    return results
+
+
+@check("host.v4l2_devices", scope="host")
+def v4l2_devices(ctx: Context) -> List[CheckResult]:
+    """Every camera the session needs is connected (v4l2 for webcams, USB for the RealSense)."""
+    name = "host.v4l2_devices"
+    results: List[CheckResult] = []
+    blocks: List[Tuple[str, List[str]]] = []
+    if not ctx.have("v4l2-ctl"):
+        results.append(
+            _warn(
+                name,
+                "v4l2-ctl not installed on the host; cannot enumerate webcams",
+                remedy="sudo apt install v4l-utils (the container has it, the host needs it too\n"
+                "because preflight runs generate_usb_config.sh on the host).",
+            )
+        )
+    else:
+        _, out, _ = ctx.run(["v4l2-ctl", "--list-devices"])
+        # v4l2-ctl exits non-zero when some node can't be opened but still lists
+        # the rest, so trust the output rather than the return code. An empty
+        # list is not an error by itself: the RealSense is not listed while its
+        # driver runs, and a RealSense-only session has nothing else.
+        blocks = parse_v4l2_devices(out)
+        ctx.cache["v4l2_output"] = out
+        results.append(
+            _ok(name, f"{len(blocks)} video device(s) enumerated", found=[h for h, _ in blocks])
+        )
+    ctx.cache["v4l2_blocks"] = blocks if ctx.have("v4l2-ctl") else None
+    usb = list_usb_devices()
+    ctx.cache["usb_devices"] = usb
+
+    claimed = set()
+    seen_usb = set()
+    for cam in ctx.config.cameras:
+        if cam.usb_name:
+            claimed.update(h for h, _ in blocks if cam.v4l2_name and cam.v4l2_name in h)
+            if cam.usb_name in seen_usb:
+                continue  # e.g. D435_depth: same physical device as D435
+            seen_usb.add(cam.usb_name)
+            results.append(_check_usb_camera(f"{name}.{cam.name}", cam, usb))
+            continue
+        if not cam.v4l2_name:
+            continue  # e.g. D435_depth: same physical device as D435
+        if not ctx.have("v4l2-ctl"):
+            continue  # already warned above
+        matches = [(h, devs) for h, devs in blocks if cam.v4l2_name in h]
+        if not matches:
+            status = _fail if cam.required else _warn
+            results.append(
+                status(
+                    f"{name}.{cam.name}",
+                    f"{cam.name} not enumerated (looking for '{cam.v4l2_name}')",
+                    remedy="Replug the camera, then re-run preflight (it regenerates\n"
+                    "usb_connector_chart.yml).",
+                    found=[h for h, _ in blocks],
+                )
+            )
+            continue
+        claimed.update(h for h, _ in matches)
+        if len(matches) > 1 and cam.kind == "usb":
+            # e.g. blue and yellow: same model, only the chart tells them apart.
+            summary = (f"{len(matches)} devices named '{cam.v4l2_name}'; "
+                       f"usb_connector_chart.yml decides which one is /{cam.chart_key or cam.name}")
+        else:
+            summary = "; ".join(f"{h.rstrip(':')} {devs[0] if devs else ''}".strip() for h, devs in matches)
+        results.append(_ok(f"{name}.{cam.name}", f"{summary} [multicam_server]"))
+
+    conf = _session_conf(ctx)
+    # Connected USB-identified cameras (the RealSense) the conf does not record.
+    for cam in ctx.config.catalog:
+        if not cam.usb_name or cam.usb_name in seen_usb:
+            continue
+        seen_usb.add(cam.usb_name)
+        hits = [d for d in usb if cam.usb_name in d["product"]]
+        if hits and conf:
+            results.append(
+                _warn(
+                    f"{name}.{cam.name}",
+                    f"{hits[0]['product']} is connected but {conf} does not record it",
+                    remedy=_unrecorded_remedy(conf, cam.image_topic),
+                )
+            )
+
+    # Anything v4l2 lists that no catalog camera accounts for.
+    usb_identified = [c.v4l2_name for c in ctx.config.catalog if c.usb_name and c.v4l2_name]
+    webcam_names = [c.v4l2_name for c in ctx.config.catalog if c.kind == "usb" and c.v4l2_name]
+    unknown = []
+    for header, _ in blocks:
+        if header in claimed or any(n in header for n in usb_identified):
+            continue
+        if any(n in header for n in webcam_names):
+            # Reported per chart entry in host.usb_connector_chart, the only
+            # place blue and yellow can be told apart.
+            continue
+        unknown.append(header.rstrip(":"))
+    if unknown:
+        label = "not needed this session" if conf else "not in the default camera list"
+        results.append(_ok(f"{name}.other", f"{label}: {'; '.join(unknown)}", devices=unknown))
+    return results
+
+
+def _check_usb_camera(row: str, cam, usb: List[Dict[str, str]]) -> CheckResult:
+    """A camera found by its USB product name, e.g. any RealSense."""
+    hits = [d for d in usb if cam.usb_name in d["product"]]
+    if not hits:
+        status = _fail if cam.required else _warn
+        return status(
+            row,
+            f"no USB device with '{cam.usb_name}' in its name is connected",
+            remedy="Replug the RealSense, preferably into a USB 3 port, directly rather than\n"
+            "through a hub.",
+        )
+    if len(hits) > 1:
+        return _warn(
+            row,
+            f"{len(hits)} devices match '{cam.usb_name}': "
+            + "; ".join(f"{d['product']} at {d['port']}" for d in hits),
+            remedy="realsense2_camera opens the one whose serial is REALSENSE_SERIAL in\n"
+            "docker-compose.yml. Unplug the ones you do not use.",
+        )
+    d = hits[0]
+    where = f"{d['product']} at USB port {d['port']} ({d['vendor']}:{d['product_id']})"
+    try:
+        speed = float(d["speed"])
+    except ValueError:
+        speed = 0.0
+    if 0 < speed < 5000:
+        return _warn(
+            row,
+            f"{where} is on a USB 2 link ({d['speed']} Mb/s)",
+            remedy="The RealSense needs USB 3 for colour + depth at full rate. Use a blue USB 3\n"
+            "port and a USB 3 cable, without a hub.",
+        )
+    return _ok(row, f"{where}, {d['speed']} Mb/s [realsense2_camera]")
+
+
+def _regenerate_chart(ctx: Context, path: str) -> List[CheckResult]:
+    """Re-run generate_usb_config.sh and replace the chart if the result differs.
+
+    The two Logitech webcams report the same v4l2 name, so the script tells
+    them apart only by list order (first is blue, second is yellow). If a
+    camera moves port, or a second one is plugged in, an existing topic can
+    end up pointing at a different physical camera. That is reported as a
+    warning with the old and new USB paths, never silently.
+    """
+    name = "host.usb_connector_chart.generate"
+    rel = os.path.relpath(path, ctx.repo_root)
+    if not ctx.have("v4l2-ctl"):
+        return [
+            _warn(
+                name,
+                f"v4l2-ctl not installed; cannot regenerate, checking {rel} as it is",
+                remedy="sudo apt install v4l-utils",
+            )
+        ]
+
+    script = os.path.join(ctx.repo_root, "generate_usb_config.sh")
+    new_path = path + ".new"
+    try:
+        rc, out, err = ctx.run(["bash", script, new_path], timeout=30)
+        if rc != 0 or not os.path.exists(new_path):
+            return [
+                _fail(
+                    name,
+                    "generate_usb_config.sh failed",
+                    remedy=f"Run it by hand to see the error: ./generate_usb_config.sh\n{err.strip()}",
+                )
+            ]
+        with open(new_path) as f:
+            new = parse_flat_yaml(f.read())
+
+        old = None
+        if os.path.exists(path):
+            with open(path) as f:
+                old = {k: v for k, v in parse_flat_yaml(f.read()).items() if v}
+
+        listing = ", ".join(f"{k} ({v})" for k, v in new.items()) or "no USB webcams"
+        if old == new:
+            return [_ok(name, f"{rel} up to date: {listing}")]
+
+        backup = None
+        if old is not None:
+            backup = path + ".bak"
+            shutil.copyfile(path, backup)
+        os.replace(new_path, path)
+        # The container reads the chart only at startup; preflight offers a
+        # restart if one is already running.
+        ctx.cache["chart_changed"] = True
+    finally:
+        if os.path.exists(new_path):
+            os.remove(new_path)
+
+    if old is None:
+        return [_ok(name, f"created {rel}: {listing}")]
+
+    added = [k for k in new if k not in old]
+    rs_names = {c.name for c in ctx.config.catalog if c.kind == "realsense"}
+    removed = [k for k in old if k not in new and k not in rs_names]
+    removed_rs = [k for k in old if k not in new and k in rs_names]
+    moved = {k: (old[k], new[k]) for k in new if k in old and old[k] != new[k]}
+    notes = []
+    if added:
+        notes.append(f"added {', '.join(added)}")
+    if removed:
+        notes.append(f"dropped {', '.join(removed)} (not connected)")
+    if removed_rs:
+        notes.append(f"dropped {', '.join(removed_rs)} (RealSense, streamed by its own node)")
+    summary = f"updated {rel}: {listing}" + (f" [{'; '.join(notes)}]" if notes else "")
+
+    if moved:
+        return [
+            _warn(
+                name,
+                summary,
+                remedy="These topics now point at a different USB port than before:\n"
+                + "\n".join(f"  /{k}: {a} -> {b}" for k, (a, b) in moved.items())
+                + "\nIf a camera moved port that is expected. If not, blue and yellow may have\n"
+                "swapped (they are told apart only by enumeration order): check the images\n"
+                f"before collecting. Previous chart saved to {os.path.relpath(backup, ctx.repo_root)}.",
+                moved={k: list(v) for k, v in moved.items()},
+            )
+        ]
+    return [_ok(name, summary)]
 
 
 @check("host.usb_connector_chart", scope="host", requires=["host.repo_root"])
 def usb_connector_chart(ctx: Context) -> List[CheckResult]:
-    """usb_connector_chart.yml exists and every entry resolves to exactly one camera.
+    """usb_connector_chart.yml is regenerated and every entry resolves to exactly one camera.
 
     This is the single most common source of silent, hard-to-debug data
     corruption on this rig: the chart's keys become ROS topic names and its
@@ -232,37 +562,40 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
     """
     name = "host.usb_connector_chart"
     path = os.path.join(ctx.repo_root, ctx.config.usb_connector_chart)
+    rel = os.path.relpath(path, ctx.repo_root)
+    results: List[CheckResult] = []
+
+    if ctx.config.generate_usb_chart:
+        results += _regenerate_chart(ctx, path)
+
     if not os.path.exists(path):
-        return [
+        results.append(
             _fail(
                 name,
-                f"{ctx.config.usb_connector_chart} is missing",
-                remedy="Run ./generate_usb_config.sh from the repo root.",
+                f"{rel} is missing",
+                remedy="Run ./generate_usb_config.sh from the repo root (or re-run preflight\n"
+                "without --no-generate).",
             )
-        ]
+        )
+        return results
 
     with open(path) as f:
         chart = parse_flat_yaml(f.read())
     ctx.cache["usb_chart"] = chart
-    if not chart:
-        return [_fail(name, f"{path} is empty", remedy="Re-run ./generate_usb_config.sh.")]
-
-    results: List[CheckResult] = []
     blocks = ctx.cache.get("v4l2_blocks")
 
-    # 1. Empty values are actively dangerous, not merely useless.
+    # 1. Empty values are actively dangerous, not merely useless. The script no
+    #    longer writes them, but an old or hand-edited chart may still have them.
     empty = [k for k, v in chart.items() if not v]
     if empty:
         results.append(
             _fail(
                 f"{name}.empty_entries",
                 f"entries with no USB path: {', '.join(empty)}",
-                remedy="generate_usb_config.sh writes an empty value for every camera that was\n"
-                "not plugged in when it ran. start_streamers.py matches chart values\n"
-                "against `v4l2-ctl --list-devices` with a substring test, so an empty\n"
-                "value matches the FIRST device and silently binds that topic to the\n"
-                "wrong camera. Delete the unused lines or replug the camera and re-run\n"
-                "./generate_usb_config.sh.",
+                remedy="start_streamers.py matches chart values against `v4l2-ctl --list-devices`\n"
+                "with a substring test, so an empty value matches the FIRST device and\n"
+                "silently binds that topic to the wrong camera. Delete these lines, or\n"
+                "re-run preflight without --no-generate.",
                 entries=empty,
             )
         )
@@ -278,12 +611,17 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
             _fail(
                 f"{name}.duplicate_entries",
                 "; ".join(f"{', '.join(ks)} all point at {v}" for v, ks in dupes.items()),
-                remedy="Each camera must have its own USB path. Re-run ./generate_usb_config.sh,\n"
-                "and if two cameras share a hub port, move one to a different port.",
+                remedy="Each camera must have its own USB path. If two cameras share a hub port,\n"
+                "move one to a different port and re-run preflight.",
             )
         )
 
-    # 3. Each value must resolve to exactly one v4l2 device block.
+    conf = _session_conf(ctx)
+    needed = {c.chart_key or c.name for c in ctx.config.usb_cameras}
+    rs_names = {c.name for c in ctx.config.catalog if c.kind == "realsense"}
+
+    # 3. Each value must resolve to exactly one v4l2 device block. The passing
+    #    rows double as the "which topic is which camera" report.
     if blocks is None:
         results.append(
             _skip(f"{name}.resolves", "v4l2-ctl unavailable; cannot verify chart entries")
@@ -292,14 +630,14 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
         for key, value in chart.items():
             if not value:
                 continue  # already reported above
-            matches = [h for h, devs in blocks if value in h and devs]
+            matches = [(h, devs) for h, devs in blocks if value in h and devs]
             if not matches:
                 results.append(
                     _fail(
                         f"{name}.{key}",
                         f"'{value}' matches no connected camera",
                         remedy=f"The camera for topic /{key} is unplugged or moved ports.\n"
-                        "Replug it and re-run ./generate_usb_config.sh.",
+                        "Replug it and re-run preflight.",
                     )
                 )
             elif len(matches) > 1:
@@ -309,14 +647,42 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
                         f"'{value}' is ambiguous, it matches {len(matches)} devices",
                         remedy="start_streamers.py takes the first match, so /%s may bind to the\n"
                         "wrong camera. Make the USB path in the chart more specific." % key,
-                        matches=matches,
+                        matches=[h for h, _ in matches],
                     )
                 )
             else:
-                results.append(_ok(f"{name}.{key}", f"/{key} -> {matches[0]}"))
+                header, devs = matches[0]
+                # start_streamers.py opens the first node listed under the header.
+                mapping = f"/{key} -> {header.rstrip(':')} {devs[0]}"
+                if conf and key not in needed and key not in rs_names:
+                    results.append(
+                        _warn(
+                            f"{name}.{key}",
+                            f"{mapping}, but {conf} does not record it",
+                            remedy=_unrecorded_remedy(conf, f"/{key}/image_raw"),
+                        )
+                    )
+                else:
+                    results.append(_ok(f"{name}.{key}", mapping))
 
-    # 4. A RealSense driven by the nodelet must not also be in the chart.
-    rs_names = {c.name for c in ctx.config.realsense_cameras}
+    # 4. USB webcams the config expects must be in the chart.
+    for cam in ctx.config.usb_cameras:
+        key = cam.chart_key or cam.name
+        if chart.get(key):
+            continue
+        status = _fail if cam.required else _warn
+        hint = f" ({cam.v4l2_name})" if cam.v4l2_name else ""
+        results.append(
+            status(
+                f"{name}.{key}",
+                f"this session needs USB camera '{key}' but it is not in {rel}",
+                remedy=f"Plug in the {key} camera{hint} and re-run preflight. multicam_server\n"
+                f"will not publish /{key} without it.",
+            )
+        )
+
+    # 5. A RealSense driven by the nodelet must not also be in the chart.
+    rs_names = {c.name for c in ctx.config.catalog if c.kind == "realsense"}
     conflicting = [k for k in chart if k in rs_names]
     if conflicting:
         results.append(
@@ -330,7 +696,9 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
             )
         )
 
-    if not results:
+    if not chart and not ctx.config.usb_cameras:
+        results.append(_ok(name, f"no USB webcams in {rel} (none needed this session)"))
+    elif not any(r.name != f"{name}.generate" for r in results):
         results.append(_ok(name, f"{len(chart)} entries"))
     return results
 
@@ -340,53 +708,161 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
 # --------------------------------------------------------------------------- #
 
 
-@check("host.vr_headset", scope="host")
-def vr_headset(ctx: Context) -> CheckResult:
-    """The Meta Quest is connected over USB and authorised for adb."""
-    name = "host.vr_headset"
-    if not ctx.config.require_vr_headset:
-        return _skip(name, "teleop not required by config")
-    if not ctx.have("adb"):
-        return _fail(
-            name,
-            "adb is not installed on the host",
-            remedy="sudo apt install android-tools-adb",
-        )
-    rc, out, err = ctx.run(["adb", "devices"], timeout=30)
-    if rc != 0:
-        return _fail(name, "`adb devices` failed", remedy=err.strip())
+QUEST_UDEV_RULE_PATH = "/etc/udev/rules.d/51-oculus.rules"
+# Meta/Oculus USB vendor id. MODE 0666: any user may open it, so nobody needs
+# to be in plugdev or log out and back in.
+QUEST_UDEV_RULE = 'SUBSYSTEM=="usb", ATTR{idVendor}=="2833", MODE="0666"'
 
+
+def _adb_devices(ctx: Context) -> Tuple[int, List[Tuple[str, str]], str]:
+    rc, out, err = ctx.run(["adb", "devices"], timeout=30)
     devices = []
     for line in out.splitlines()[1:]:
         if "\t" in line:
             serial, state = line.split("\t", 1)
             devices.append((serial.strip(), state.strip()))
+    return rc, devices, err
 
+
+def _restart_adb(ctx: Context) -> None:
+    """Restart the adb server on the host, with the host user's (allowed) key."""
+    ctx.run(["adb", "kill-server"], timeout=15)
+    ctx.run(["adb", "start-server"], timeout=30)
+    time.sleep(2)  # give the server a moment to enumerate USB
+
+
+def _install_quest_udev_rule(ctx: Context) -> bool:
+    """One-time: let any user open the headset's USB device. Needs sudo."""
+    print(
+        "\n[preflight] The headset is connected, but Linux does not let this user open it.\n"
+        "[preflight] Fixing that once and for all by installing a udev rule:\n"
+        f"[preflight]   {QUEST_UDEV_RULE}\n"
+        f"[preflight]   -> {QUEST_UDEV_RULE_PATH}\n"
+        "[preflight] This needs sudo; you may be asked for your password.",
+        flush=True,
+    )
+    try:
+        steps = [
+            (["sudo", "tee", QUEST_UDEV_RULE_PATH], QUEST_UDEV_RULE + "\n"),
+            (["sudo", "udevadm", "control", "--reload-rules"], None),
+            # Re-applies the rules to devices already plugged in: no replug needed.
+            (["sudo", "udevadm", "trigger", "--subsystem-match=usb"], None),
+        ]
+        for cmd, data in steps:
+            subprocess.run(cmd, input=data, text=True, stdout=subprocess.DEVNULL, check=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[preflight] Could not install the rule: {exc}", flush=True)
+        return False
+    time.sleep(1)
+    return True
+
+
+def _quest_manual_remedy() -> str:
+    return (
+        "Run once (it lasts across reboots and replugs):\n"
+        f"  echo '{QUEST_UDEV_RULE}' | sudo tee {QUEST_UDEV_RULE_PATH}\n"
+        "  sudo udevadm control --reload-rules && sudo udevadm trigger\n"
+        "  adb kill-server; adb devices"
+    )
+
+
+@check("host.vr_headset", scope="host")
+def vr_headset(ctx: Context) -> CheckResult:
+    """The Meta Quest is connected over USB and authorised for adb.
+
+    Fixes what it can by itself (adb server, USB permissions). For what needs a
+    person - plugging the headset in, clicking "Allow" inside it - it pauses
+    and checks again when run interactively.
+    """
+    name = "host.vr_headset"
+    if not ctx.config.require_vr_headset:
+        return _skip(name, "teleop not required by config")
+    if not ctx.have("adb"):
+        return _fail(name, "adb is not installed on the host", remedy="sudo apt install android-tools-adb")
+
+    fixed: List[str] = []
+    rc, devices, err = _adb_devices(ctx)
+    if rc != 0:
+        _restart_adb(ctx)
+        fixed.append("restarted adb")
+        rc, devices, err = _adb_devices(ctx)
+        if rc != 0:
+            return _fail(name, "`adb devices` failed", remedy=err.strip())
+
+    def states(prefix):
+        return [s for s, st in devices if st.startswith(prefix)]
+
+    # 1. Linux will not let us open the USB device: install the udev rule.
+    if states("no permissions"):
+        if not os.path.exists(QUEST_UDEV_RULE_PATH):
+            if not ctx.interactive:
+                return _fail(name, "headset found, but this user may not open its USB device (no permissions)",
+                             remedy=_quest_manual_remedy(), devices=devices)
+            if not _install_quest_udev_rule(ctx):
+                return _fail(name, "no permissions, and installing the udev rule failed",
+                             remedy=_quest_manual_remedy(), devices=devices)
+            fixed.append(f"installed {QUEST_UDEV_RULE_PATH}")
+        _restart_adb(ctx)
+        fixed.append("restarted adb")
+        rc, devices, err = _adb_devices(ctx)
+        if states("no permissions"):
+            return _fail(
+                name,
+                "still no permissions after setting up the udev rule",
+                remedy="Unplug and replug the headset's USB-C cable, then re-run preflight. If it\n"
+                "persists, check its vendor id with `lsusb` (expected 2833) and adjust\n"
+                f"{QUEST_UDEV_RULE_PATH}.",
+                devices=devices,
+            )
+
+    # 2. A stale or offline connection: restarting adb usually clears it.
+    if states("offline"):
+        ctx.run(["adb", "reconnect", "offline"], timeout=15)
+        _restart_adb(ctx)
+        fixed.append("reconnected offline device")
+        rc, devices, err = _adb_devices(ctx)
+
+    # 3. Things only a person can do: plug it in, click "Allow".
+    while True:
+        if not devices:
+            prompt = ("\n[preflight] No headset found. Plug the Quest into the desktop with the USB-C\n"
+                      "[preflight] data cable and switch it on.")
+        elif states("unauthorized"):
+            prompt = ("\n[preflight] The headset needs your OK. Put it on and click 'Allow' on the\n"
+                      "[preflight] 'Allow USB debugging?' prompt (tick 'Always allow from this computer').\n"
+                      "[preflight] No prompt? Unplug and replug the cable.")
+        else:
+            break
+        if ctx.pause(prompt) == "s":
+            break
+        rc, devices, err = _adb_devices(ctx)
+        if states("unauthorized") or not devices:
+            print("[preflight] Not there yet.", flush=True)
+
+    done = f" ({'; '.join(fixed)})" if fixed else ""
     if not devices:
         return _fail(
             name,
             "no adb device found - the headset is not connected",
-            remedy="Plug the Quest into the desktop with the USB-C cable, put it on, and\n"
-            "accept the 'Allow USB debugging' prompt inside the headset.",
+            remedy="Plug the Quest into the desktop with the USB-C data cable (not a\n"
+            "charge-only cable) and switch it on, then re-run.",
         )
-    unauthorized = [s for s, st in devices if st != "device"]
-    if unauthorized:
+    if [s for s, st in devices if st != "device"]:
         return _fail(
             name,
             f"headset present but not authorised ({devices[0][1]})",
-            remedy="Put the headset on and click 'Allow USB' / 'Always allow from this\n"
-            "computer' on the prompt, then re-run. If no prompt appears, unplug and\n"
-            "replug the cable.",
+            remedy="Put the headset on and click 'Allow' / 'Always allow from this computer'\n"
+            "on the prompt, then re-run. If no prompt appears, unplug and replug the cable.",
             devices=devices,
         )
     if len(devices) > 1:
         return _warn(
             name,
-            f"{len(devices)} adb devices connected",
+            f"{len(devices)} adb devices connected{done}",
             remedy="oculus_reader picks one arbitrarily. Disconnect the other android devices.",
             devices=devices,
         )
-    return _ok(name, f"headset {devices[0][0]} authorised", devices=devices)
+    return _ok(name, f"headset {devices[0][0]} authorised{done}", devices=devices)
 
 
 # --------------------------------------------------------------------------- #
@@ -402,30 +878,44 @@ def dataset_dir(ctx: Context) -> List[CheckResult]:
     cfg = ctx.config
 
     legacy = os.path.expanduser(cfg.legacy_dataset_root)
+    uid, gid = cfg.container_uid, cfg.container_gid
     if not os.path.isdir(legacy):
+        mkdir = f"mkdir -p {legacy}"
+        if os.getuid() != uid:
+            mkdir += f" && {chown_remedy(legacy, uid)}"
         results.append(
             _fail(
                 f"{name}.mount",
                 f"{legacy} does not exist (it is the host side of the $DATA mount)",
-                remedy=f"mkdir -p {legacy} && sudo chown -R "
-                f"{cfg.container_uid}:{cfg.container_gid} {legacy}",
+                remedy=f"{mkdir}\n"
+                "Create it BEFORE starting the container: if it is missing, docker creates\n"
+                "it owned by root and the container cannot write to it.",
             )
         )
     else:
         st = os.stat(legacy)
-        if (st.st_uid, st.st_gid) != (cfg.container_uid, cfg.container_gid):
+        ok, via = can_write(st, uid, gid)
+        perms = f"{st.st_uid}:{st.st_gid} {stat_mode(st)}"
+        if not ok:
+            hint = ""
+            if st.st_uid == 0:
+                hint = ("Owned by root: docker probably created it because it did not exist\n"
+                        "when the container first started.\n")
             results.append(
                 _fail(
-                    f"{name}.ownership",
-                    f"{legacy} is owned by {st.st_uid}:{st.st_gid}, "
-                    f"container writes as {cfg.container_uid}:{cfg.container_gid}",
-                    remedy=f"sudo chown -R {cfg.container_uid}:{cfg.container_gid} {legacy}\n"
-                    "Otherwise the collection script fails with a permission error only\n"
-                    "*after* you have teleoperated a trajectory.",
+                    f"{name}.writable",
+                    f"container user {uid}:{gid} cannot write to {legacy} ({perms})",
+                    remedy=hint
+                    + "Collection would fail with a permission error only *after* you have\n"
+                    "teleoperated a trajectory. Check what is inside first (ls -la), then:\n"
+                    f"  {chown_remedy(legacy, uid)}",
                 )
             )
         else:
-            results.append(_ok(f"{name}.ownership", f"{legacy} owned by {st.st_uid}:{st.st_gid}"))
+            results.append(
+                _ok(f"{name}.writable", f"{legacy} writable by container user {uid}:{gid} "
+                    f"(as {via}; {perms})")
+            )
 
         free_gb = shutil.disk_usage(legacy).free / 1e9
         if free_gb < cfg.min_free_gb:
@@ -448,8 +938,7 @@ def dataset_dir(ctx: Context) -> List[CheckResult]:
                 f"{name}.unified_root",
                 f"{unified} does not exist",
                 remedy=f"The lab-wide layout is {unified}/<task_instruction>/<timestamp>.\n"
-                f"sudo mkdir -p {unified} && sudo chown -R "
-                f"{cfg.container_uid}:{cfg.container_gid} {unified}",
+                f"sudo mkdir -p {unified} && {chown_remedy(unified, uid)}",
             )
         )
     else:
@@ -478,13 +967,15 @@ def robonet_container(ctx: Context) -> CheckResult:
             remedy=f"Run it from the repo root ({ctx.repo_root}).\n{err.strip()}",
         )
     running = [l for l in out.splitlines() if "running" in l.lower()]
+    if not running and ctx.cache.get("auto_start"):
+        return _skip(name, f"the {service} container is not running yet; preflight starts it next")
     if not running:
         return _fail(
             name,
             f"the {service} container is not running",
-            remedy="Start it in its own terminal and leave it running:\n"
-            "  cd ~/bridge_data_robot\n"
-            "  USB_CONNECTOR_CHART=$(pwd)/usb_connector_chart.yml docker compose up --build robonet",
+            remedy="Run preflight without --no-start and it starts the container for you, or\n"
+            "start it by hand:\n"
+            "  USB_CONNECTOR_CHART=$(pwd)/usb_connector_chart.yml docker compose up -d robonet",
             ps_output=out.strip(),
         )
     return _ok(name, running[0].strip())

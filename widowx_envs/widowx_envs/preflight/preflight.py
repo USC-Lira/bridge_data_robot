@@ -43,7 +43,11 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     __package__ = "widowx_envs.preflight"
 
-from widowx_envs.preflight.config import PreflightConfig  # noqa: E402
+from widowx_envs.preflight.config import (  # noqa: E402
+    PreflightConfig,
+    read_conf_topics,
+    select_cameras_from_conf,
+)
 from widowx_envs.preflight.core import (  # noqa: E402
     CheckResult,
     Context,
@@ -134,6 +138,23 @@ def run_container_checks_from_host(args, config: PreflightConfig, repo_root: str
     return [CheckResult.from_dict(d) for d in json.loads(blob)["results"]]
 
 
+def apply_conf_cameras(config: PreflightConfig, conf_path: str) -> dict:
+    """Replace ``config.cameras`` with the catalog cameras the experiment conf records.
+
+    Returns what happened, for the ``host.conf_cameras`` check to report. On
+    any problem the cameras are left as they were.
+    """
+    try:
+        topics = read_conf_topics(conf_path)
+    except (OSError, ValueError) as exc:
+        return {"error": f"could not read {conf_path}: {exc}"}
+    cameras, unknown = select_cameras_from_conf(config, topics)
+    if not cameras and not unknown:
+        return {"empty": True, "topics": topics}
+    config.cameras = cameras
+    return {"cameras": [c.name for c in cameras], "unknown": unknown, "topics": topics}
+
+
 def _quote(arg: str) -> str:
     return "'" + arg.replace("'", "'\\''") + "'"
 
@@ -160,6 +181,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip", action="append", default=[], metavar="PREFIX", help="skip checks whose name starts with PREFIX (repeatable)")
     p.add_argument("--json", metavar="PATH", help="write the machine-readable report here ('-' for stdout)")
     p.add_argument("--repo-root", help="path to the bridge_data_robot checkout (default: autodetected)")
+    p.add_argument(
+        "--no-generate",
+        action="store_true",
+        help="do not re-run generate_usb_config.sh; check usb_connector_chart.yml as it is",
+    )
+    p.add_argument(
+        "--no-start",
+        action="store_true",
+        help="only check: do not start the robonet container when it is not running",
+    )
+    p.add_argument(
+        "--build",
+        action="store_true",
+        help="rebuild the robonet image before starting the container (normally only done when\n"
+        "the image is missing or widowx_envs/Dockerfile / requirements.txt changed)",
+    )
+    p.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="never pause or ask (default when not run from a terminal)",
+    )
     p.add_argument("--list", action="store_true", help="list the registered checks and exit")
     p.add_argument("-v", "--verbose", action="store_true", help="echo the commands being run")
     return p
@@ -172,6 +214,8 @@ def main(argv=None) -> int:
         config = PreflightConfig.from_dict(json.loads(base64.b64decode(args.config_b64)))
     else:
         config = PreflightConfig.load(args.config)
+    if args.no_generate:
+        config.generate_usb_chart = False
 
     if args.list:
         try:
@@ -184,15 +228,28 @@ def main(argv=None) -> int:
         return 0
 
     repo_root = args.repo_root or find_repo_root()
-    ctx = Context(config=config, repo_root=repo_root, verbose=args.verbose)
+    interactive = (
+        not args.non_interactive
+        and args.json != "-"
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    )
+    ctx = Context(config=config, repo_root=repo_root, verbose=args.verbose, interactive=interactive)
     if args.conf:
         ctx.cache["conf_file"] = os.path.abspath(args.conf) if not in_container() else args.conf
+        # With --config-b64 the host already did this and passed the result in.
+        if not args.config_b64:
+            ctx.cache["conf_selection"] = apply_conf_cameras(config, ctx.cache["conf_file"])
 
     scope = args.scope
     if scope == "all" and in_container():
         scope = "container"
 
     results: List[CheckResult] = []
+    # Start the container ourselves once the host checks pass, unless asked
+    # not to, or when only some checks were selected (debugging one check).
+    auto_start = scope == "all" and not args.no_start and not args.only
+    ctx.cache["auto_start"] = auto_start
 
     if scope in ("all", "host"):
         results += run_checks(ctx, "host", only=args.only, skip=args.skip)
@@ -209,17 +266,26 @@ def main(argv=None) -> int:
             print_report(container_results, "WidowX preflight - container (ROS)")
 
     elif scope == "all":
-        host_blocked = any(
-            r.name.startswith("host.robonet_container") and r.status is Status.FAIL
-            for r in results
-        )
+        if auto_start:
+            from widowx_envs.preflight import session
+
+            host_failed = [r for r in results if r.status is Status.FAIL]
+            session_results = session.ensure_running(ctx, host_failed, force_build=args.build)
+            results += session_results
+            print_report(session_results, "WidowX preflight - container start")
+            host_blocked = any(r.status in (Status.FAIL, Status.SKIP) for r in session_results)
+        else:
+            host_blocked = any(
+                r.name.startswith("host.robonet_container") and r.status is Status.FAIL
+                for r in results
+            )
         if host_blocked:
             results.append(
                 CheckResult(
                     "container.*",
                     Status.SKIP,
                     "robonet container is not running",
-                    remedy="Start it first, then re-run preflight.",
+                    remedy="See the container start section above.",
                 )
             )
             print_report(results[-1:], "WidowX preflight - container (ROS)")
