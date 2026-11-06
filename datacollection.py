@@ -58,6 +58,19 @@ CONTROLS = """
 """
 
 
+CONTROLS_WINDOW_PID = os.path.expanduser("~/.cache/widowx_preflight/controls_window.pid")
+
+
+def open_controls_window():
+    """Show the controls card in its own window, to keep in view while collecting."""
+    inner = (
+        f"python3 {session._sh(os.path.abspath(__file__))} --controls; "
+        "echo 'This window closes when data collection ends.'; read -r -p ''"
+    )
+    return session.open_window("WidowX VR controls", inner, CONTROLS_WINDOW_PID, REPO_ROOT,
+                               size="68x32")
+
+
 def ask(question: str) -> bool:
     try:
         return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
@@ -126,12 +139,18 @@ def main() -> int:
 
     config = PreflightConfig.load(args.config)
     cmd = collection_command(args.conf, config)
-    print(CONTROLS)
+    window = open_controls_window()
+    if window:
+        print("\nThe VR controls are in a separate 'WidowX VR controls' window.")
+    else:
+        print(CONTROLS)  # no desktop to open a window on
     print(f"Starting data collection with {os.path.basename(args.conf)}.\n", flush=True)
     try:
         rc = subprocess.run(cmd, cwd=REPO_ROOT, env=session.compose_env(REPO_ROOT, config)).returncode
     except KeyboardInterrupt:
         rc = 130
+    finally:
+        session.close_window(CONTROLS_WINDOW_PID)
 
     print("\nData collection ended.")
     print("Data is under", os.path.expanduser(config.dataset_root))
