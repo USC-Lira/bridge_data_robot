@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -30,6 +31,8 @@ ROW = "session.container"
 READY_TIMEOUT_S = 120
 # Records which Dockerfile/requirements the last preflight-built image came from.
 BUILD_RECORD = os.path.expanduser("~/.cache/widowx_preflight/image_inputs.json")
+# PID of the shell inside the log window, so stop() can close that window.
+LOG_WINDOW_PID = os.path.expanduser("~/.cache/widowx_preflight/log_window.pid")
 
 
 # --------------------------------------------------------------------------- #
@@ -146,7 +149,11 @@ def open_log_window(repo_root: str, config) -> Optional[str]:
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return None
     service = config.compose_service
+    os.makedirs(os.path.dirname(LOG_WINDOW_PID), exist_ok=True)
+    # If the container dies on its own, the window stays open on the last
+    # messages; stop() closes it when the container is stopped on purpose.
     inner = (
+        f"echo $$ > {_sh(LOG_WINDOW_PID)}; "
         f"cd {_sh(repo_root)} && docker compose logs -f --tail 200 {service}; "
         "echo; echo '[the robonet container stopped]'; read -r -p 'Press Enter to close. '"
     )
@@ -213,10 +220,39 @@ def go_to_sleep(repo_root: str, config) -> bool:
     return rc == 0
 
 
+def close_log_window() -> bool:
+    """Close the log window opened by open_log_window(), if it is still open."""
+    try:
+        with open(LOG_WINDOW_PID) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.remove(LOG_WINDOW_PID)
+    except OSError:
+        pass
+    # Make sure the PID still belongs to our window's shell, not a recycled one.
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            cmdline = f.read().replace(b"\0", b" ")
+    except OSError:
+        return False
+    if b"compose logs -f" not in cmdline:
+        return False
+    try:
+        # The shell leads its own process group (new session in the terminal):
+        # this ends it and its `docker compose logs`, and the window closes.
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 def stop(repo_root: str, config) -> bool:
     service = config.compose_service
     rc1, _, _ = compose(repo_root, config, ["stop", service], capture=False, timeout=120)
     rc2, _, _ = compose(repo_root, config, ["rm", "-f", service], capture=False, timeout=60)
+    close_log_window()
     return rc1 == 0 and rc2 == 0
 
 
