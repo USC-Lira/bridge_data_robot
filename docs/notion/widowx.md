@@ -19,7 +19,7 @@ Quest 2.
 | Cameras | Intel RealSense D415 (serial `217222067236`, set as `REALSENSE_SERIAL` in `docker-compose.yml`), colour + depth, published under the historical `/D435/...` topic names. It replaced a D435 (`146322077603`). Logitech 1080P Pro Stream ×2 and a wrist cam are supported but not in the current config. |
 | Teleop | Meta Quest 2 + RAIL Oculus Teleoperation app, over USB/adb |
 | Environment | ROS Noetic in docker (`robonet` service) |
-| Data out | `$HOME/widowx_data` on the host ↔ `/home/robonet/trainingdata` in the container |
+| Data out | `/datasets` on the host ↔ `/home/robonet/trainingdata` (`$DATA`) in the container. Older sessions: `$HOME/widowx_data` |
 
 ## 1. Physical setup
 
@@ -124,7 +124,8 @@ Then:
 ### Where the data lands
 
 Inside the container under `$DATA` (`/home/robonet/trainingdata`), which is
-`$HOME/widowx_data` on the host.
+`/datasets` on the host. Sessions recorded before the move are still in
+`$HOME/widowx_data`; they were not copied over.
 
 > 🚧 The lab-wide target layout is `/datasets/<task_instruction>/<timestamp>`.
 > The WidowX saver does not write that yet — tracked as an open item.
@@ -222,7 +223,7 @@ python examples/02_finetune_on_lira_data.py \
 | `PermissionError: [Errno 13]` from docker | user not in the `docker` group | `sudo groupadd docker; sudo usermod -aG docker $USER`, then **reboot** |
 | Collection hangs with no error at startup | `CameraRecorder` waiting forever on a `camera_info` topic that does not exist | `rostopic list \| grep camera_info`; set `info_name` explicitly on the `IMTopic` |
 | Data recorded from the wrong camera | empty/duplicate entry in `usb_connector_chart.yml` | Plug in all cameras and run preflight (it regenerates the chart) |
-| Permission error when saving, after teleoperating | `$HOME/widowx_data` owned by the wrong uid | `sudo chown -R 1000:1002 $HOME/widowx_data` |
+| Permission error when saving, after teleoperating | `/datasets` not writable by the container user (uid 1000) | Run preflight: `host.dataset_dir.writable` prints the exact fix |
 | Arm driver fails to start | mini-USB unplugged, arm unpowered, or missing udev rule | check cable + power; `ls /dev/ttyDXL` |
 
 ## 8. Known gaps

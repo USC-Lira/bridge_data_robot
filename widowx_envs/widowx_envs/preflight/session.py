@@ -43,6 +43,8 @@ LOG_WINDOW_PID = os.path.expanduser("~/.cache/widowx_preflight/log_window.pid")
 def compose_env(repo_root: str, config) -> Dict[str, str]:
     env = dict(os.environ)
     env["USB_CONNECTOR_CHART"] = os.path.join(repo_root, config.usb_connector_chart)
+    # The $DATA mount in docker-compose.yml, so it is the folder preflight checked.
+    env["DATASET_ROOT"] = os.path.expanduser(config.dataset_root)
     return env
 
 
@@ -64,6 +66,22 @@ def container_running(repo_root: str, config) -> bool:
         repo_root, config, ["ps", "--status", "running", "-q", config.compose_service], timeout=60
     )
     return rc == 0 and bool(out.strip())
+
+
+def data_mount_source(repo_root: str, config) -> Optional[str]:
+    """Host folder the running container has mounted as $DATA, if any."""
+    rc, out, _ = compose(repo_root, config, ["ps", "-q", config.compose_service], timeout=60)
+    cid = out.strip().splitlines()[0] if rc == 0 and out.strip() else ""
+    if not cid:
+        return None
+    fmt = ('{{range .Mounts}}{{if eq .Destination "/home/robonet/trainingdata"}}'
+           '{{.Source}}{{end}}{{end}}')
+    try:
+        src = subprocess.run(["docker", "inspect", "-f", fmt, cid], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return src or None
 
 
 def rostopics(repo_root: str, config) -> List[str]:
@@ -310,10 +328,16 @@ def ensure_running(ctx: Context, host_failed: List[CheckResult], force_build: bo
     """
     repo_root, config = ctx.repo_root, ctx.config
     if container_running(repo_root, config):
-        if not ctx.cache.get("chart_changed"):
+        stale = []
+        if ctx.cache.get("chart_changed"):
+            stale.append("usb_connector_chart.yml changed in this run (the container reads it only at startup)")
+        mounted = data_mount_source(repo_root, config)
+        wanted = os.path.realpath(os.path.expanduser(config.dataset_root))
+        if mounted and os.path.realpath(mounted) != wanted:
+            stale.append(f"it saves data to {mounted}, not {wanted} (started with an older docker-compose.yml)")
+        if not stale:
             return [CheckResult(ROW, Status.PASS, f"{config.compose_service} already running")]
-        msg = ("usb_connector_chart.yml changed in this run, but the running container still uses "
-               "the old one (it reads the chart only at startup)")
+        msg = "the running container is out of date: " + "; ".join(stale)
         if not ctx.interactive:
             return [CheckResult(ROW, Status.WARN, msg,
                                 remedy="Restart the container to apply it: python3 stop_container.py,\n"

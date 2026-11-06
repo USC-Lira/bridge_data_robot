@@ -90,9 +90,12 @@ class PreflightConfig:
     require_vr_headset: bool = True
 
     # -- data --------------------------------------------------------------- #
-    # Target of the cross-robot layout: /datasets/<task_instruction>/<timestamp>.
+    # Host side of the $DATA mount: where collected data is written. Passed to
+    # docker compose as DATASET_ROOT. Lab-wide target layout (not yet what the
+    # saver writes): /datasets/<task_instruction>/<timestamp>.
     dataset_root: str = "/datasets"
-    # Where this repo actually writes today (host side of the $DATA mount).
+    # Where sessions were written before the move to /datasets. Left in place;
+    # preflight only mentions it.
     legacy_dataset_root: str = "~/widowx_data"
     min_free_gb: float = 50.0
     # uid:gid the container writes as; the host dir must be owned by it.
