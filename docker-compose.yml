@@ -8,6 +8,11 @@ services:
     entrypoint: ./widowx_envs/scripts/run.sh
     environment:
       - DISPLAY=:0
+      # LIRA: serial of the RealSense the realsense2_camera nodelet opens (run.sh
+      # passes it to widowx_rs.launch). Set here, not in the Dockerfile, so a
+      # camera swap needs no rebuild: REALSENSE_SERIAL=<serial> docker compose up ...
+      # 217222067236 is the D415 on the Alienware; the old D435 was 146322077603.
+      - REALSENSE_SERIAL=${REALSENSE_SERIAL:-217222067236}
     user: robonet:1002
     stdin_open: true
     tty: true

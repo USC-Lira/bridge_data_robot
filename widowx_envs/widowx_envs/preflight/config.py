@@ -168,7 +168,10 @@ def _d435(name, image_topic, info_topic, v4l2_name=None) -> CameraSpec:
         kind="realsense",
         image_topic=image_topic,
         info_topic=info_topic,
-        serial="146322077603",  # must match serial_no_camera1 in widowx_rs.launch
+        # The RealSense on the Alienware is a D415 (it replaced the D435
+        # 146322077603); the "D435" names and topics are kept for compatibility
+        # with the conf files. Must match REALSENSE_SERIAL in docker-compose.yml.
+        serial="217222067236",
         v4l2_name=v4l2_name,
         width=640,
         height=480,

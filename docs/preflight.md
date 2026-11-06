@@ -150,9 +150,7 @@ It does not crash. It does not warn. It publishes some other camera's frames on
 
 The script now writes only the cameras it finds (and `{}` when there are none,
 because an empty file loads as `None` and crashed `start_streamers.py`). It
-writes the RealSense under the `D435` key again (temporarily, to test
-whether the rig behaves better with it), which `host.usb_connector_chart.realsense_conflict`
-reports as a warning since the RealSense nodelet drives the same device.
+no longer writes the RealSense, which the RealSense nodelet already drives.
 
 **Preflight regenerates the chart on every run** (`host.usb_connector_chart.generate`),
 so nobody has to remember the script. It writes to a temp file, compares with

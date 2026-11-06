@@ -91,7 +91,7 @@ now should stay untracked (or move into Notion, which is where they belong).
 
 ### 5. Rig-specific values belong in config, not in code
 
-The D435 serial `146322077603`, the `/datasets` root, the arm model — these
+The RealSense serial (`217222067236`, set in `docker-compose.yml`), the `/datasets` root, the arm model — these
 differ per station and will differ per robot as the lab grows. They live in
 `preflight/config.py` and `preflight.example.yaml`.
 

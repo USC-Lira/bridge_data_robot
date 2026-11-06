@@ -72,3 +72,19 @@ its own failures. Remaining risks of the same kind:
 - [ ] The Interbotix script has no `set -e`, so any failure inside it is
       invisible. Consider running it with `bash -e`, or replacing it with the
       few steps we actually need.
+
+## RealSense naming and identity
+
+The Alienware's RealSense is now a **D415** (`217222067236`), which replaced
+the D435 (`146322077603`). Its serial is set in one place, `REALSENSE_SERIAL`
+in `docker-compose.yml`.
+
+- [ ] Its topics are still `/D435/...`, and preflight's catalog calls it `D435`,
+      because `conf_*.py` files and existing datasets use that name. Decide
+      whether to rename it to something model-neutral (e.g. `/realsense/...`),
+      and update the conf files at the same time.
+- [ ] Add a preflight check that compares the serial the RealSense driver
+      reports with the expected one, so a camera swap fails with "found D415
+      217222067236, expected ..." instead of the driver retrying forever.
+- [ ] Remove `ENV REALSENSE_SERIAL` from `widowx_envs/Dockerfile` at the next
+      planned rebuild; `docker-compose.yml` overrides it anyway.

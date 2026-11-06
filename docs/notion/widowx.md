@@ -16,7 +16,7 @@ Quest 2.
 |---|---|
 | Arm | WidowX 250 6-DOF (`ROBONETV2_ARM=wx250s`) |
 | Desktop | Alienware · login: *see lab password manager* |
-| Cameras | Intel RealSense D435 (serial `146322077603`), colour + depth. Logitech 1080P Pro Stream ×2 and a wrist cam are supported but not in the current config. |
+| Cameras | Intel RealSense D415 (serial `217222067236`, set as `REALSENSE_SERIAL` in `docker-compose.yml`), colour + depth, published under the historical `/D435/...` topic names. It replaced a D435 (`146322077603`). Logitech 1080P Pro Stream ×2 and a wrist cam are supported but not in the current config. |
 | Teleop | Meta Quest 2 + RAIL Oculus Teleoperation app, over USB/adb |
 | Environment | ROS Noetic in docker (`robonet` service) |
 | Data out | `$HOME/widowx_data` on the host ↔ `/home/robonet/trainingdata` in the container |

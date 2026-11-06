@@ -4,7 +4,7 @@
     <arg name="camera_connector_chart" default="" />
     <arg name="python_node" default="false" />
     <arg name="realsense" default="true" />
-    <arg name="serial_no_camera1"             default="146322077603"/>            <!-- Note: Replace with actual serial number -->
+    <arg name="serial_no_camera1"             default="217222067236"/>            <!-- LIRA: D415 on the Alienware. run.sh overrides this with $REALSENSE_SERIAL from docker-compose.yml -->
     <arg name="camera1"                       default="D435"/>                    <!-- Note: Replace with camera name -->
     <arg name="tf_prefix_camera1"         default="$(arg camera1)"/>
     <arg name="initial_reset"             default="true"/>

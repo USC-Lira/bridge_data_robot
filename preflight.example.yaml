@@ -34,7 +34,7 @@ camera_catalog:
     kind: realsense
     image_topic: /D435/color/image_raw
     info_topic: /D435/color/camera_info
-    serial: '146322077603'          # must match serial_no_camera1 in widowx_rs.launch
+    serial: '217222067236'          # the D415; must match REALSENSE_SERIAL in docker-compose.yml
     v4l2_name: Intel(R) RealSense(TM) Depth Ca
     width: 640
     height: 480
@@ -43,7 +43,7 @@ camera_catalog:
     kind: realsense
     image_topic: /D435/depth/image_rect_raw
     info_topic: /D435/depth/camera_info
-    serial: '146322077603'
+    serial: '217222067236'
     width: 640
     height: 480
 
@@ -69,13 +69,13 @@ cameras:
     kind: realsense
     image_topic: /D435/color/image_raw
     info_topic: /D435/color/camera_info
-    serial: '146322077603'
+    serial: '217222067236'
     v4l2_name: Intel(R) RealSense(TM) Depth Ca
   - name: D435_depth
     kind: realsense
     image_topic: /D435/depth/image_rect_raw
     info_topic: /D435/depth/camera_info
-    serial: '146322077603'
+    serial: '217222067236'
 
 usb_connector_chart: usb_connector_chart.yml
 # Re-run generate_usb_config.sh on every preflight (same as omitting --no-generate).

@@ -11,11 +11,10 @@
 # `v4l2-ctl --list-devices` with a substring test, and '' matches the first
 # device, silently publishing the wrong camera under that topic.
 #
-# The RealSense is written too, under the D435 key, as the original script did.
-# Note that widowx_rs.launch also starts the realsense2_camera nodelet for it,
-# so multicam_server opens the same device a second time as a plain webcam
-# (publishing /D435/image_raw next to the nodelet's /D435/color/...). Kept for
-# now to test whether the rig behaves better with it; see docs/preflight.md.
+# The RealSense is deliberately NOT written here: widowx_rs.launch always starts
+# the realsense2_camera nodelet for it (selected by REALSENSE_SERIAL), and
+# listing it in the chart would make multicam_server open the same device a
+# second time as a plain webcam.
 #
 # preflight.py runs this script for you on every run and reports the result.
 
@@ -31,7 +30,6 @@ fi
 blue=""
 yellow=""
 wrist=""
-d435=""
 
 # Header lines look like "1080P Pro Stream (usb-0000:00:14.0-9.1):". Take the
 # LAST parenthesised part: the RealSense name itself contains "(R)" and "(TM)".
@@ -50,8 +48,6 @@ while IFS= read -r line; do
         blue=$(usb_path "$line")
     elif [[ $line == *"1080P Pro Stream"* ]]; then
         yellow=$(usb_path "$line")
-    elif [[ $line == *"Intel(R) RealSense(TM) Depth Ca"* ]]; then
-        d435=$(usb_path "$line")
     fi
 done <<< "$devices"
 
@@ -62,13 +58,12 @@ trap 'rm -f "$tmp"' EXIT
     if [ -n "$blue" ]; then echo "blue: '$blue'"; fi
     if [ -n "$yellow" ]; then echo "yellow: '$yellow'"; fi
     if [ -n "$wrist" ]; then echo "wrist: '$wrist'"; fi
-    if [ -n "$d435" ]; then echo "D435: '$d435'"; fi
     # An empty file loads as None in start_streamers.py; {} loads as an empty dict.
-    if [ -z "$blue$yellow$wrist$d435" ]; then echo "{}"; fi
+    if [ -z "$blue$yellow$wrist" ]; then echo "{}"; fi
 } > "$tmp"
 chmod 644 "$tmp"  # mktemp creates 0600; the container reads this via a bind mount
 mv "$tmp" "$out"
 trap - EXIT
 
 found=$(grep -c ":" "$out" || true)
-echo "wrote $out ($found camera(s))"
+echo "wrote $out ($found USB webcam(s))"
