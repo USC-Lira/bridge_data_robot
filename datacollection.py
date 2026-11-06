@@ -100,6 +100,15 @@ def open_controls_window(conf_path=None):
                                size="68x40")
 
 
+def flush_typed_input() -> None:
+    """Drop keys typed while collection ran, so they do not answer the next question."""
+    try:
+        import termios
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:
+        pass
+
+
 def ask(question: str) -> bool:
     try:
         return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
@@ -182,12 +191,14 @@ def main() -> int:
     finally:
         session.close_window(CONTROLS_WINDOW_PID)
 
-    print("\nData collection ended.")
+    how = {0: "ended normally", 130: "stopped with Ctrl+C"}.get(rc, f"exited with code {rc}")
+    print(f"\nData collection ended ({how}).")
     print("Data is under", os.path.expanduser(config.dataset_root))
-    # Exit code 0 = ended cleanly (from the headset, or num_trajectories reached).
-    # After Ctrl+C or an error, do not offer it: the operator may want to look first.
-    if rc == 0 and ask("\nStop the robonet container now? "
-                       "(the arm goes to its sleep pose first, and you confirm before it stops)"):
+    if rc not in (0, 130):
+        print("If that was not expected, the container output window shows what happened.")
+    flush_typed_input()
+    if ask("\nStop the robonet container now? "
+           "(the arm goes to its sleep pose first, and you confirm before it stops)"):
         stop_rc = subprocess.run([sys.executable, os.path.join(REPO_ROOT, "stop_container.py")],
                                  cwd=REPO_ROOT).returncode
         if stop_rc == 0:
