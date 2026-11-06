@@ -214,7 +214,13 @@ cd ~/bridge_data_robot
 python3 widowx_envs/widowx_envs/preflight/preflight.py \
     --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
 
-# host only — before starting the robonet container
+# check only, never start the container
+python3 widowx_envs/widowx_envs/preflight/preflight.py --no-start
+
+# force an image rebuild before starting
+python3 widowx_envs/widowx_envs/preflight/preflight.py --build --conf ...
+
+# host only
 python3 widowx_envs/widowx_envs/preflight/preflight.py --scope host
 
 # one check while you debug it
@@ -228,6 +234,30 @@ python3 widowx_envs/widowx_envs/preflight/preflight.py --list
 
 Exit codes: `0` clear (possibly with warnings), `1` at least one blocking
 failure, `2` preflight could not run.
+
+## Starting the container
+
+With the default `--scope all`, preflight brings the session up instead of
+only reporting on it (`session.py`):
+
+1. Host checks run. If any FAILs, the container is **not** started.
+2. If `robonet` is not running: build the image only if it does not exist or
+   `widowx_envs/Dockerfile` / `requirements.txt` changed since preflight last
+   built it (`--build` forces it; the code is mounted, so nothing else needs a
+   rebuild), then `docker compose up -d`. The container runs detached, and a
+   new terminal window shows `docker compose logs -f robonet`, so closing the
+   window never stops the arm driver.
+3. Wait (up to 120 s) for the arm and every expected camera topic.
+4. Run the container checks.
+
+A running container is **never stopped without asking**: stopping the arm
+driver drops the arm. If the chart changed while one was running, preflight
+asks whether to move the arm to its sleep pose and restart it.
+`python3 stop_container.py` (repo root) does the same on its own.
+
+Interactive steps (headset "Allow" prompt, sudo for the one-time udev rule,
+restart confirmation) only happen in a terminal; with `--json`,
+`--non-interactive`, or no TTY, preflight reports instead of waiting.
 
 ## Adding a check
 

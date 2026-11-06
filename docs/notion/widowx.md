@@ -54,9 +54,16 @@ state, docker, the dataset directory, and — once the container is up — the R
 side: arm driver, camera topics, live frames, and that the conf file you passed
 declares only topics that are actually publishing.
 
+- If all host checks pass and the container is not running, preflight
+  **starts it** (`docker compose up -d`, building the image only if it is
+  missing or the Dockerfile changed), opens a new terminal window with its
+  output, waits for the arm and cameras, then runs the container checks.
+- It fixes what it can by itself (USB chart, adb, the headset's USB
+  permissions) and **pauses** for what needs you: plugging in the headset,
+  clicking "Allow" inside it.
 - Exit code `0` = clear to collect, `1` = fix the failures first.
 - Every failure prints the command that fixes it.
-- Before the container is running, use `--scope host`.
+- `--no-start` only checks; `--non-interactive` never pauses or asks.
 
 Details and how to add checks: [`docs/preflight.md`](https://github.com/USC-Lira/bridge_data_robot/blob/main/docs/preflight.md)
 
@@ -65,21 +72,19 @@ Details and how to add checks: [`docs/preflight.md`](https://github.com/USC-Lira
 
 ## 3. Data collection
 
-Two terminal windows. Window 1 runs the robot; window 2 runs collection.
-
-### Window 1 — start the robot container
+### Window 1 — preflight starts the robot
 
 ```bash
 cd ~/bridge_data_robot
-
-# writes usb_connector_chart.yml for whatever cameras are plugged in
-python3 widowx_envs/widowx_envs/preflight/preflight.py --scope host
-
-USB_CONNECTOR_CHART=$(pwd)/usb_connector_chart.yml docker compose up --build robonet
+python3 widowx_envs/widowx_envs/preflight/preflight.py \
+    --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
 ```
 
-This builds and runs Ubuntu + ROS + all dependencies, and starts the arm driver
-and camera nodes. **Leave it running.**
+Preflight regenerates `usb_connector_chart.yml`, checks the rig, starts the
+robonet container in the background (Ubuntu + ROS + arm driver + cameras), and
+opens a **"robonet (container output)"** window with its log. Closing that
+window only closes the view; the container keeps running. To get the log back:
+`docker compose logs -f robonet`.
 
 > ⚠️ The two Logitech webcams have the same name, so blue/yellow are assigned
 > by enumeration order. If preflight warns that a topic **now points at a
@@ -126,16 +131,19 @@ Inside the container under `$DATA` (`/home/robonet/trainingdata`), which is
 
 ## 4. Powering off
 
-1. Kill **window 2** first.
-2. Then kill **window 1**.
-3. ⚠️ **Hold the arm while window 1 shuts down** so it does not collapse onto
-   the table.
-4. Power the arm off.
-5. Put the Quest on its charger.
+1. Stop collection in **window 2** first.
+2. Stop the container:
+   ```bash
+   python3 stop_container.py
+   ```
+   It moves the arm to its sleep pose, asks you to confirm, then stops the
+   container. ⚠️ **Hold the arm** anyway: the motors turn off when it stops.
+3. Power the arm off.
+4. Put the Quest on its charger.
 
 ## 5. Inference
 
-With the `robonet` container running (window 1):
+With the `robonet` container running (started by preflight, window 1):
 
 ```bash
 # server

@@ -12,6 +12,8 @@ import os
 import re
 import shutil
 import stat
+import subprocess
+import time
 from typing import Dict, List, Tuple
 
 from widowx_envs.preflight.core import CheckResult, Context, Status, check
@@ -508,6 +510,9 @@ def _regenerate_chart(ctx: Context, path: str) -> List[CheckResult]:
             backup = path + ".bak"
             shutil.copyfile(path, backup)
         os.replace(new_path, path)
+        # The container reads the chart only at startup; preflight offers a
+        # restart if one is already running.
+        ctx.cache["chart_changed"] = True
     finally:
         if os.path.exists(new_path):
             os.remove(new_path)
@@ -703,68 +708,161 @@ def usb_connector_chart(ctx: Context) -> List[CheckResult]:
 # --------------------------------------------------------------------------- #
 
 
-@check("host.vr_headset", scope="host")
-def vr_headset(ctx: Context) -> CheckResult:
-    """The Meta Quest is connected over USB and authorised for adb."""
-    name = "host.vr_headset"
-    if not ctx.config.require_vr_headset:
-        return _skip(name, "teleop not required by config")
-    if not ctx.have("adb"):
-        return _fail(
-            name,
-            "adb is not installed on the host",
-            remedy="sudo apt install android-tools-adb",
-        )
-    rc, out, err = ctx.run(["adb", "devices"], timeout=30)
-    if rc != 0:
-        return _fail(name, "`adb devices` failed", remedy=err.strip())
+QUEST_UDEV_RULE_PATH = "/etc/udev/rules.d/51-oculus.rules"
+# Meta/Oculus USB vendor id. MODE 0666: any user may open it, so nobody needs
+# to be in plugdev or log out and back in.
+QUEST_UDEV_RULE = 'SUBSYSTEM=="usb", ATTR{idVendor}=="2833", MODE="0666"'
 
+
+def _adb_devices(ctx: Context) -> Tuple[int, List[Tuple[str, str]], str]:
+    rc, out, err = ctx.run(["adb", "devices"], timeout=30)
     devices = []
     for line in out.splitlines()[1:]:
         if "\t" in line:
             serial, state = line.split("\t", 1)
             devices.append((serial.strip(), state.strip()))
+    return rc, devices, err
 
+
+def _restart_adb(ctx: Context) -> None:
+    """Restart the adb server on the host, with the host user's (allowed) key."""
+    ctx.run(["adb", "kill-server"], timeout=15)
+    ctx.run(["adb", "start-server"], timeout=30)
+    time.sleep(2)  # give the server a moment to enumerate USB
+
+
+def _install_quest_udev_rule(ctx: Context) -> bool:
+    """One-time: let any user open the headset's USB device. Needs sudo."""
+    print(
+        "\n[preflight] The headset is connected, but Linux does not let this user open it.\n"
+        "[preflight] Fixing that once and for all by installing a udev rule:\n"
+        f"[preflight]   {QUEST_UDEV_RULE}\n"
+        f"[preflight]   -> {QUEST_UDEV_RULE_PATH}\n"
+        "[preflight] This needs sudo; you may be asked for your password.",
+        flush=True,
+    )
+    try:
+        steps = [
+            (["sudo", "tee", QUEST_UDEV_RULE_PATH], QUEST_UDEV_RULE + "\n"),
+            (["sudo", "udevadm", "control", "--reload-rules"], None),
+            # Re-applies the rules to devices already plugged in: no replug needed.
+            (["sudo", "udevadm", "trigger", "--subsystem-match=usb"], None),
+        ]
+        for cmd, data in steps:
+            subprocess.run(cmd, input=data, text=True, stdout=subprocess.DEVNULL, check=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[preflight] Could not install the rule: {exc}", flush=True)
+        return False
+    time.sleep(1)
+    return True
+
+
+def _quest_manual_remedy() -> str:
+    return (
+        "Run once (it lasts across reboots and replugs):\n"
+        f"  echo '{QUEST_UDEV_RULE}' | sudo tee {QUEST_UDEV_RULE_PATH}\n"
+        "  sudo udevadm control --reload-rules && sudo udevadm trigger\n"
+        "  adb kill-server; adb devices"
+    )
+
+
+@check("host.vr_headset", scope="host")
+def vr_headset(ctx: Context) -> CheckResult:
+    """The Meta Quest is connected over USB and authorised for adb.
+
+    Fixes what it can by itself (adb server, USB permissions). For what needs a
+    person - plugging the headset in, clicking "Allow" inside it - it pauses
+    and checks again when run interactively.
+    """
+    name = "host.vr_headset"
+    if not ctx.config.require_vr_headset:
+        return _skip(name, "teleop not required by config")
+    if not ctx.have("adb"):
+        return _fail(name, "adb is not installed on the host", remedy="sudo apt install android-tools-adb")
+
+    fixed: List[str] = []
+    rc, devices, err = _adb_devices(ctx)
+    if rc != 0:
+        _restart_adb(ctx)
+        fixed.append("restarted adb")
+        rc, devices, err = _adb_devices(ctx)
+        if rc != 0:
+            return _fail(name, "`adb devices` failed", remedy=err.strip())
+
+    def states(prefix):
+        return [s for s, st in devices if st.startswith(prefix)]
+
+    # 1. Linux will not let us open the USB device: install the udev rule.
+    if states("no permissions"):
+        if not os.path.exists(QUEST_UDEV_RULE_PATH):
+            if not ctx.interactive:
+                return _fail(name, "headset found, but this user may not open its USB device (no permissions)",
+                             remedy=_quest_manual_remedy(), devices=devices)
+            if not _install_quest_udev_rule(ctx):
+                return _fail(name, "no permissions, and installing the udev rule failed",
+                             remedy=_quest_manual_remedy(), devices=devices)
+            fixed.append(f"installed {QUEST_UDEV_RULE_PATH}")
+        _restart_adb(ctx)
+        fixed.append("restarted adb")
+        rc, devices, err = _adb_devices(ctx)
+        if states("no permissions"):
+            return _fail(
+                name,
+                "still no permissions after setting up the udev rule",
+                remedy="Unplug and replug the headset's USB-C cable, then re-run preflight. If it\n"
+                "persists, check its vendor id with `lsusb` (expected 2833) and adjust\n"
+                f"{QUEST_UDEV_RULE_PATH}.",
+                devices=devices,
+            )
+
+    # 2. A stale or offline connection: restarting adb usually clears it.
+    if states("offline"):
+        ctx.run(["adb", "reconnect", "offline"], timeout=15)
+        _restart_adb(ctx)
+        fixed.append("reconnected offline device")
+        rc, devices, err = _adb_devices(ctx)
+
+    # 3. Things only a person can do: plug it in, click "Allow".
+    while True:
+        if not devices:
+            prompt = ("\n[preflight] No headset found. Plug the Quest into the desktop with the USB-C\n"
+                      "[preflight] data cable and switch it on.")
+        elif states("unauthorized"):
+            prompt = ("\n[preflight] The headset needs your OK. Put it on and click 'Allow' on the\n"
+                      "[preflight] 'Allow USB debugging?' prompt (tick 'Always allow from this computer').\n"
+                      "[preflight] No prompt? Unplug and replug the cable.")
+        else:
+            break
+        if ctx.pause(prompt) == "s":
+            break
+        rc, devices, err = _adb_devices(ctx)
+        if states("unauthorized") or not devices:
+            print("[preflight] Not there yet.", flush=True)
+
+    done = f" ({'; '.join(fixed)})" if fixed else ""
     if not devices:
         return _fail(
             name,
             "no adb device found - the headset is not connected",
-            remedy="Plug the Quest into the desktop with the USB-C cable, put it on, and\n"
-            "accept the 'Allow USB debugging' prompt inside the headset.",
+            remedy="Plug the Quest into the desktop with the USB-C data cable (not a\n"
+            "charge-only cable) and switch it on, then re-run.",
         )
-    no_perm = [s for s, st in devices if st.startswith("no permissions")]
-    if no_perm:
-        # A Linux USB permission problem, not the in-headset prompt: adb cannot
-        # even open the device, so the headset never gets to ask.
-        return _fail(
-            name,
-            "headset found, but this user may not open its USB device (no permissions)",
-            remedy="Add a udev rule for Meta/Oculus devices (USB vendor 2833), once:\n"
-            "  echo 'SUBSYSTEM==\"usb\", ATTR{idVendor}==\"2833\", MODE=\"0664\", GROUP=\"plugdev\"' \\\n"
-            "    | sudo tee /etc/udev/rules.d/51-oculus.rules\n"
-            "  sudo udevadm control --reload-rules && sudo udevadm trigger\n"
-            "  groups | grep -q plugdev || sudo usermod -aG plugdev $USER   (then log out/in)\n"
-            "Then replug the headset and run: adb kill-server; adb devices",
-            devices=devices,
-        )
-    unauthorized = [s for s, st in devices if st != "device"]
-    if unauthorized:
+    if [s for s, st in devices if st != "device"]:
         return _fail(
             name,
             f"headset present but not authorised ({devices[0][1]})",
-            remedy="Put the headset on and click 'Allow USB' / 'Always allow from this\n"
-            "computer' on the prompt, then re-run. If no prompt appears, unplug and\n"
-            "replug the cable.",
+            remedy="Put the headset on and click 'Allow' / 'Always allow from this computer'\n"
+            "on the prompt, then re-run. If no prompt appears, unplug and replug the cable.",
             devices=devices,
         )
     if len(devices) > 1:
         return _warn(
             name,
-            f"{len(devices)} adb devices connected",
+            f"{len(devices)} adb devices connected{done}",
             remedy="oculus_reader picks one arbitrarily. Disconnect the other android devices.",
             devices=devices,
         )
-    return _ok(name, f"headset {devices[0][0]} authorised", devices=devices)
+    return _ok(name, f"headset {devices[0][0]} authorised{done}", devices=devices)
 
 
 # --------------------------------------------------------------------------- #
@@ -869,13 +967,15 @@ def robonet_container(ctx: Context) -> CheckResult:
             remedy=f"Run it from the repo root ({ctx.repo_root}).\n{err.strip()}",
         )
     running = [l for l in out.splitlines() if "running" in l.lower()]
+    if not running and ctx.cache.get("auto_start"):
+        return _skip(name, f"the {service} container is not running yet; preflight starts it next")
     if not running:
         return _fail(
             name,
             f"the {service} container is not running",
-            remedy="Start it in its own terminal and leave it running:\n"
-            "  cd ~/bridge_data_robot\n"
-            "  USB_CONNECTOR_CHART=$(pwd)/usb_connector_chart.yml docker compose up --build robonet",
+            remedy="Run preflight without --no-start and it starts the container for you, or\n"
+            "start it by hand:\n"
+            "  USB_CONNECTOR_CHART=$(pwd)/usb_connector_chart.yml docker compose up -d robonet",
             ps_output=out.strip(),
         )
     return _ok(name, running[0].strip())

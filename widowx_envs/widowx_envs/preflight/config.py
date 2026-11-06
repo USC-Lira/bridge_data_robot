@@ -101,6 +101,9 @@ class PreflightConfig:
 
     # -- container ---------------------------------------------------------- #
     compose_service: str = "robonet"
+    # Image the service runs (docker-compose.yml `image:`), used to decide
+    # whether preflight has to build it before starting the container.
+    compose_image: str = "robonet-base"
     container_env_vars: List[str] = dataclasses.field(
         default_factory=lambda: ["DATA", "EXP", "ROBONETV2_ARM"]
     )
