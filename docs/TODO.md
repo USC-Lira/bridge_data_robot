@@ -69,6 +69,11 @@ its own failures. Remaining risks of the same kind:
       (`C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654`) was rotated in 2025. A
       build without cache may fail at the ROS apt steps with `EXPKEYSIG`;
       switch to the `ros-apt-source` package from the ROS install docs.
+- [ ] Pin every package in `widowx_envs/requirements.txt` to the versions that
+      work today (`pip freeze` inside a working container). Almost nothing is
+      pinned, so each rebuild installs the newest versions, and packages that
+      quietly drop Python 3.8 (the container's version) break the import of
+      `widowx_envs.widowx_env`. `moviepy` was the first (pinned to 1.0.3).
 - [ ] The Interbotix script has no `set -e`, so any failure inside it is
       invisible. Consider running it with `bash -e`, or replacing it with the
       few steps we actually need.

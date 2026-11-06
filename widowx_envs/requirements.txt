@@ -5,7 +5,9 @@ future
 imageio
 imageio-ffmpeg<0.5.0
 matplotlib
-moviepy
+# LIRA: moviepy 2.x needs Python >= 3.9 (the container has 3.8) and removed
+# moviepy.editor, which widowx_envs/utils/image_utils.py imports.
+moviepy==1.0.3
 opencv-python
 numpy>=1.23.4
 pyquaternion
