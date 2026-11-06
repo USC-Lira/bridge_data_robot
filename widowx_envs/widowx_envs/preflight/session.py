@@ -154,40 +154,40 @@ def _record_build(repo_root: str, image: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# log window
+# extra terminal windows (container log, VR controls card)
 # --------------------------------------------------------------------------- #
 
 
-def open_log_window(repo_root: str, config) -> Optional[str]:
-    """Show ``docker compose logs -f`` in a new terminal window.
+def open_window(title: str, inner: str, pid_file: str, cwd: str, env=None,
+                size: Optional[str] = None) -> Optional[str]:
+    """Run the shell command ``inner`` in a new terminal window.
 
-    Returns the terminal used, or None if there is no desktop to open one on
-    (e.g. over SSH). Closing the window only closes the view.
+    The window's shell writes its PID to ``pid_file`` so close_window() can
+    close it later. Returns the terminal used, or None if there is no desktop
+    to open one on (e.g. over SSH).
     """
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return None
-    service = config.compose_service
-    os.makedirs(os.path.dirname(LOG_WINDOW_PID), exist_ok=True)
-    # If the container dies on its own, the window stays open on the last
-    # messages; stop() closes it when the container is stopped on purpose.
-    inner = (
-        f"echo $$ > {_sh(LOG_WINDOW_PID)}; "
-        f"cd {_sh(repo_root)} && docker compose logs -f --tail 200 {service}; "
-        "echo; echo '[the robonet container stopped]'; read -r -p 'Press Enter to close. '"
-    )
-    title = "robonet (container output)"
+    os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+    inner = f"echo $$ > {_sh(pid_file)}; " + inner
+    # Tag the window's processes, so close_window() can tell them from an
+    # unrelated process that reused the PID. An environment variable survives
+    # bash exec'ing its last command; the command line does not.
+    env = dict(env or os.environ)
+    env[WINDOW_TAG_VAR] = _window_tag(pid_file)
+    geo = [f"--geometry={size}"] if size else []
     candidates = [
-        ("gnome-terminal", ["gnome-terminal", f"--title={title}", "--", "bash", "-c", inner]),
+        ("gnome-terminal", ["gnome-terminal", f"--title={title}", *geo, "--", "bash", "-c", inner]),
         ("konsole", ["konsole", "-p", f"tabtitle={title}", "-e", "bash", "-c", inner]),
-        ("xfce4-terminal", ["xfce4-terminal", f"--title={title}", "-x", "bash", "-c", inner]),
+        ("xfce4-terminal", ["xfce4-terminal", f"--title={title}", *geo, "-x", "bash", "-c", inner]),
         ("x-terminal-emulator", ["x-terminal-emulator", "-e", "bash", "-c", inner]),
-        ("xterm", ["xterm", "-T", title, "-e", "bash", "-c", inner]),
+        ("xterm", ["xterm", "-T", title, *(["-geometry", size] if size else []), "-e", "bash", "-c", inner]),
     ]
     for binary, cmd in candidates:
         if shutil.which(binary):
             try:
                 subprocess.Popen(
-                    cmd, cwd=repo_root, env=compose_env(repo_root, config),
+                    cmd, cwd=cwd, env=env,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, start_new_session=True,
                 )
@@ -195,6 +195,63 @@ def open_log_window(repo_root: str, config) -> Optional[str]:
             except OSError:
                 continue
     return None
+
+
+WINDOW_TAG_VAR = "WIDOWX_PREFLIGHT_WINDOW"
+
+
+def _window_tag(pid_file: str) -> str:
+    return os.path.basename(pid_file)
+
+
+def close_window(pid_file: str) -> bool:
+    """Close a window opened by open_window(), if it is still open.
+
+    Only kills the PID if its environment carries this window's tag, so a PID
+    that was recycled by an unrelated process is never killed.
+    """
+    try:
+        with open(pid_file) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.remove(pid_file)
+    except OSError:
+        pass
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            environ = f.read().split(b"\0")
+    except OSError:
+        return False
+    if f"{WINDOW_TAG_VAR}={_window_tag(pid_file)}".encode() not in environ:
+        return False
+    try:
+        # The shell leads its own process group (new session in the terminal):
+        # this ends it and whatever it runs, and the window closes.
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def open_log_window(repo_root: str, config) -> Optional[str]:
+    """Show ``docker compose logs -f`` in a new terminal window.
+
+    Closing the window only closes the view. If the container dies on its own,
+    the window stays open on the last messages; stop() closes it when the
+    container is stopped on purpose.
+    """
+    inner = (
+        f"cd {_sh(repo_root)} && docker compose logs -f --tail 200 {config.compose_service}; "
+        "echo; echo '[the robonet container stopped]'; read -r -p 'Press Enter to close. '"
+    )
+    return open_window("robonet (container output)", inner, LOG_WINDOW_PID, repo_root,
+                       env=compose_env(repo_root, config))
+
+
+def close_log_window() -> bool:
+    return close_window(LOG_WINDOW_PID)
 
 
 def _sh(s: str) -> str:
@@ -236,34 +293,6 @@ def go_to_sleep(repo_root: str, config) -> bool:
         capture=False, timeout=120,
     )
     return rc == 0
-
-
-def close_log_window() -> bool:
-    """Close the log window opened by open_log_window(), if it is still open."""
-    try:
-        with open(LOG_WINDOW_PID) as f:
-            pid = int(f.read().strip())
-    except (OSError, ValueError):
-        return False
-    try:
-        os.remove(LOG_WINDOW_PID)
-    except OSError:
-        pass
-    # Make sure the PID still belongs to our window's shell, not a recycled one.
-    try:
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            cmdline = f.read().replace(b"\0", b" ")
-    except OSError:
-        return False
-    if b"compose logs -f" not in cmdline:
-        return False
-    try:
-        # The shell leads its own process group (new session in the terminal):
-        # this ends it and its `docker compose logs`, and the window closes.
-        os.killpg(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        return False
-    return True
 
 
 def stop(repo_root: str, config) -> bool:

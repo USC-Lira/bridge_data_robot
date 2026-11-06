@@ -72,6 +72,20 @@ Details and how to add checks: [`docs/preflight.md`](https://github.com/USC-Lira
 
 ## 3. Data collection
 
+### The short way: one command
+
+```bash
+cd ~/bridge_data_robot
+python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+```
+
+It runs preflight with that conf (which starts the container if needed). If
+preflight ends without a FAIL, it asks whether to start collecting, then asks
+you to confirm the **RAIL Oculus Teleoperation app is open** in the headset and
+the **headset is facing you**, and starts `run_data_collection.py` with the
+same conf. `Ctrl+C` stops collection; `python3 stop_container.py` stops the
+container. The two windows below are what it does for you.
+
 ### Window 1 — preflight starts the robot
 
 ```bash
@@ -116,10 +130,23 @@ Use your own config file — there are examples in
 
 Then:
 
-- Make sure the headset is **facing you**.
-- Keep the controller inside the headset's field of view.
-- To move the arm: hold the button under your middle finger and move your hand.
-- **A** = save trajectory. **Right joystick** = discard trajectory.
+- Make sure the headset is **facing you**, and keep the controller inside its
+  field of view.
+
+**VR controls** (right controller; `python3 datacollection.py --controls`
+prints this card):
+
+| Control | Before recording | While recording | After a trajectory |
+|---|---|---|---|
+| **Grip** (middle finger) | press to **start** recording | **hold** to move the arm: it follows your hand, position and rotation. Release to stop; move your hand, press again to continue from there | |
+| **Trigger** (index finger) | | closes the gripper; how far you pull = how closed | |
+| **B** | moves the arm to its **neutral** pose | **ends** the trajectory | |
+| **A** | | | **save** it |
+| **Right joystick** (press) | | | **discard** it |
+
+A trajectory also ends by itself after the conf's `T` steps. Move smoothly:
+a sudden jump prints `delta transform too large!` and pauses in the terminal;
+type `c` and Enter to continue.
 
 ### Where the data lands
 
