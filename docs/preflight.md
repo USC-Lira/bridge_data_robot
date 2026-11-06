@@ -95,7 +95,7 @@ deadline:
 | `host.docker_permissions` | the `usermod -aG docker` problem from the README |
 | `host.nvidia_runtime` | `runtime: nvidia` in compose will fail |
 | `host.arm_serial_port` | `/dev/ttyDXL` absent (cable/power/udev) or not writable |
-| `host.v4l2_devices` | a camera is not enumerated at all |
+| `host.v4l2_devices` | a camera is not connected. Webcams are looked up in `v4l2-ctl`; the RealSense by USB product name in `/sys/bus/usb/devices`, because while the container runs librealsense holds it and it is missing from `v4l2-ctl`. Any RealSense model counts (the serial in `docker-compose.yml` picks the unit); warns if it is on a USB 2 link |
 | `host.usb_connector_chart` | see below — the big one |
 | `host.vr_headset` | no adb device, or `unauthorized` instead of `device` |
 | `host.dataset_dir` | `$HOME/widowx_data` missing, not writable by the container user (predicted from permission bits; `container.data_dir` does a real write), or nearly full |

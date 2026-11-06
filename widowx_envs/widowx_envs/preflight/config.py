@@ -46,6 +46,10 @@ class CameraSpec:
     # `v4l2-ctl --list-devices`.
     chart_key: Optional[str] = None
     v4l2_name: Optional[str] = None
+    # Substring of the USB product name in /sys/bus/usb/devices/*/product. Used
+    # instead of v4l2 for cameras whose driver claims the USB device directly
+    # (librealsense): while the container runs, they vanish from v4l2-ctl.
+    usb_name: Optional[str] = None
     width: int = 640
     height: int = 480
     required: bool = True
@@ -162,7 +166,7 @@ class PreflightConfig:
         return dataclasses.asdict(self)
 
 
-def _d435(name, image_topic, info_topic, v4l2_name=None) -> CameraSpec:
+def _d435(name, image_topic, info_topic, v4l2_name=None, usb_name=None) -> CameraSpec:
     return CameraSpec(
         name=name,
         kind="realsense",
@@ -173,6 +177,7 @@ def _d435(name, image_topic, info_topic, v4l2_name=None) -> CameraSpec:
         # with the conf files. Must match REALSENSE_SERIAL in docker-compose.yml.
         serial="217222067236",
         v4l2_name=v4l2_name,
+        usb_name=usb_name,
         width=640,
         height=480,
         required=True,
@@ -186,8 +191,10 @@ def default_catalog() -> List[CameraSpec]:
     connector chart is what tells them apart.
     """
     return [
+        # Any RealSense model matches ("RealSense" is in the USB product name of
+        # both the D415 and the D435); the serial is what pins the exact unit.
         _d435("D435", "/D435/color/image_raw", "/D435/color/camera_info",
-              v4l2_name="Intel(R) RealSense(TM) Depth Ca"),
+              v4l2_name="Intel(R) RealSense(TM) Depth Ca", usb_name="RealSense"),
         # Same physical device as D435, so no v4l2_name: it is enumerated once.
         _d435("D435_depth", "/D435/depth/image_rect_raw", "/D435/depth/camera_info"),
         CameraSpec(name="blue", kind="usb", chart_key="blue", v4l2_name="1080P Pro Stream"),

@@ -106,6 +106,44 @@ def parse_flat_yaml(text: str) -> Dict[str, str]:
     return out
 
 
+SYS_USB_DEVICES = "/sys/bus/usb/devices"
+
+
+def list_usb_devices(root: str = "") -> List[Dict[str, str]]:
+    """Every USB device the kernel sees, read from sysfs (no tools needed).
+
+    Unlike v4l2-ctl, this still lists a camera while a driver such as
+    librealsense has claimed it. ``port`` is the sysfs name (e.g. ``2-8``),
+    which is also the "port number" realsense2_camera logs.
+    """
+    root = root or SYS_USB_DEVICES
+    out: List[Dict[str, str]] = []
+    if not os.path.isdir(root):
+        return out
+
+    def read(d, f):
+        try:
+            with open(os.path.join(d, f)) as fh:
+                return fh.read().strip()
+        except OSError:
+            return ""
+
+    for entry in sorted(os.listdir(root)):
+        d = os.path.join(root, entry)
+        if not os.path.exists(os.path.join(d, "idVendor")):
+            continue  # interfaces (2-8:1.0) and root hubs' sub-entries
+        out.append(
+            {
+                "port": entry,
+                "vendor": read(d, "idVendor"),
+                "product_id": read(d, "idProduct"),
+                "product": read(d, "product"),
+                "speed": read(d, "speed"),  # Mb/s: 480 = USB 2, 5000+ = USB 3
+            }
+        )
+    return out
+
+
 def parse_v4l2_devices(text: str) -> List[Tuple[str, List[str]]]:
     """Parse ``v4l2-ctl --list-devices`` into ``[(header, [/dev/videoN, ...])]``.
 
@@ -288,41 +326,48 @@ def conf_cameras(ctx: Context) -> List[CheckResult]:
 
 @check("host.v4l2_devices", scope="host")
 def v4l2_devices(ctx: Context) -> List[CheckResult]:
-    """Every camera the collection config expects is enumerated by v4l2."""
+    """Every camera the session needs is connected (v4l2 for webcams, USB for the RealSense)."""
     name = "host.v4l2_devices"
+    results: List[CheckResult] = []
+    blocks: List[Tuple[str, List[str]]] = []
     if not ctx.have("v4l2-ctl"):
-        return [
+        results.append(
             _warn(
                 name,
-                "v4l2-ctl not installed on the host; cannot enumerate cameras",
+                "v4l2-ctl not installed on the host; cannot enumerate webcams",
                 remedy="sudo apt install v4l-utils (the container has it, the host needs it too\n"
                 "because preflight runs generate_usb_config.sh on the host).",
             )
-        ]
-    rc, out, err = ctx.run(["v4l2-ctl", "--list-devices"])
-    # v4l2-ctl exits non-zero when some node can't be opened but still lists the
-    # rest, so trust the output rather than the return code.
-    blocks = parse_v4l2_devices(out)
-    ctx.cache["v4l2_output"] = out
-    ctx.cache["v4l2_blocks"] = blocks
-    found = [h for h, _ in blocks]
-    if not blocks:
-        return [
-            _fail(
-                name,
-                "no video devices found",
-                remedy="Check that the cameras are plugged in. Unplug/replug and re-run.",
-                stderr=err.strip(),
-            )
-        ]
+        )
+    else:
+        _, out, _ = ctx.run(["v4l2-ctl", "--list-devices"])
+        # v4l2-ctl exits non-zero when some node can't be opened but still lists
+        # the rest, so trust the output rather than the return code. An empty
+        # list is not an error by itself: the RealSense is not listed while its
+        # driver runs, and a RealSense-only session has nothing else.
+        blocks = parse_v4l2_devices(out)
+        ctx.cache["v4l2_output"] = out
+        results.append(
+            _ok(name, f"{len(blocks)} video device(s) enumerated", found=[h for h, _ in blocks])
+        )
+    ctx.cache["v4l2_blocks"] = blocks if ctx.have("v4l2-ctl") else None
+    usb = list_usb_devices()
+    ctx.cache["usb_devices"] = usb
 
-    # One row per camera the config expects, so a healthy run still says which
-    # device each one is (the RealSense never appears in the usb chart).
-    results: List[CheckResult] = [_ok(name, f"{len(blocks)} video device(s) enumerated", found=found)]
     claimed = set()
+    seen_usb = set()
     for cam in ctx.config.cameras:
+        if cam.usb_name:
+            claimed.update(h for h, _ in blocks if cam.v4l2_name and cam.v4l2_name in h)
+            if cam.usb_name in seen_usb:
+                continue  # e.g. D435_depth: same physical device as D435
+            seen_usb.add(cam.usb_name)
+            results.append(_check_usb_camera(f"{name}.{cam.name}", cam, usb))
+            continue
         if not cam.v4l2_name:
             continue  # e.g. D435_depth: same physical device as D435
+        if not ctx.have("v4l2-ctl"):
+            continue  # already warned above
         matches = [(h, devs) for h, devs in blocks if cam.v4l2_name in h]
         if not matches:
             status = _fail if cam.required else _warn
@@ -330,48 +375,88 @@ def v4l2_devices(ctx: Context) -> List[CheckResult]:
                 status(
                     f"{name}.{cam.name}",
                     f"{cam.name} not enumerated (looking for '{cam.v4l2_name}')",
-                    remedy=("Replug the D435, preferably into a USB 3 port."
-                            if cam.kind == "realsense" else
-                            "Replug the camera, then re-run preflight (it regenerates\n"
-                            "usb_connector_chart.yml)."),
-                    found=found,
+                    remedy="Replug the camera, then re-run preflight (it regenerates\n"
+                    "usb_connector_chart.yml).",
+                    found=[h for h, _ in blocks],
                 )
             )
             continue
         claimed.update(h for h, _ in matches)
-        driver = "realsense2_camera" if cam.kind == "realsense" else "multicam_server"
         if len(matches) > 1 and cam.kind == "usb":
             # e.g. blue and yellow: same model, only the chart tells them apart.
             summary = (f"{len(matches)} devices named '{cam.v4l2_name}'; "
                        f"usb_connector_chart.yml decides which one is /{cam.chart_key or cam.name}")
         else:
             summary = "; ".join(f"{h.rstrip(':')} {devs[0] if devs else ''}".strip() for h, devs in matches)
-        results.append(_ok(f"{name}.{cam.name}", f"{summary} [{driver}]"))
+        results.append(_ok(f"{name}.{cam.name}", f"{summary} [multicam_server]"))
 
-    others = [h for h in found if h not in claimed]
     conf = _session_conf(ctx)
-    unknown = []
-    for header in others:
-        known = [c for c in ctx.config.catalog if c.v4l2_name and c.v4l2_name in header]
-        if conf and known and known[0].kind == "realsense":
-            cam = known[0]
+    # Connected USB-identified cameras (the RealSense) the conf does not record.
+    for cam in ctx.config.catalog:
+        if not cam.usb_name or cam.usb_name in seen_usb:
+            continue
+        seen_usb.add(cam.usb_name)
+        hits = [d for d in usb if cam.usb_name in d["product"]]
+        if hits and conf:
             results.append(
                 _warn(
                     f"{name}.{cam.name}",
-                    f"{cam.name} is connected but {conf} does not record it",
+                    f"{hits[0]['product']} is connected but {conf} does not record it",
                     remedy=_unrecorded_remedy(conf, cam.image_topic),
                 )
             )
-        elif known and known[0].kind == "usb":
-            # Webcams are reported per chart entry in host.usb_connector_chart,
-            # which is the only place blue and yellow can be told apart.
+
+    # Anything v4l2 lists that no catalog camera accounts for.
+    usb_identified = [c.v4l2_name for c in ctx.config.catalog if c.usb_name and c.v4l2_name]
+    webcam_names = [c.v4l2_name for c in ctx.config.catalog if c.kind == "usb" and c.v4l2_name]
+    unknown = []
+    for header, _ in blocks:
+        if header in claimed or any(n in header for n in usb_identified):
             continue
-        else:
-            unknown.append(header.rstrip(":"))
+        if any(n in header for n in webcam_names):
+            # Reported per chart entry in host.usb_connector_chart, the only
+            # place blue and yellow can be told apart.
+            continue
+        unknown.append(header.rstrip(":"))
     if unknown:
         label = "not needed this session" if conf else "not in the default camera list"
         results.append(_ok(f"{name}.other", f"{label}: {'; '.join(unknown)}", devices=unknown))
     return results
+
+
+def _check_usb_camera(row: str, cam, usb: List[Dict[str, str]]) -> CheckResult:
+    """A camera found by its USB product name, e.g. any RealSense."""
+    hits = [d for d in usb if cam.usb_name in d["product"]]
+    if not hits:
+        status = _fail if cam.required else _warn
+        return status(
+            row,
+            f"no USB device with '{cam.usb_name}' in its name is connected",
+            remedy="Replug the RealSense, preferably into a USB 3 port, directly rather than\n"
+            "through a hub.",
+        )
+    if len(hits) > 1:
+        return _warn(
+            row,
+            f"{len(hits)} devices match '{cam.usb_name}': "
+            + "; ".join(f"{d['product']} at {d['port']}" for d in hits),
+            remedy="realsense2_camera opens the one whose serial is REALSENSE_SERIAL in\n"
+            "docker-compose.yml. Unplug the ones you do not use.",
+        )
+    d = hits[0]
+    where = f"{d['product']} at USB port {d['port']} ({d['vendor']}:{d['product_id']})"
+    try:
+        speed = float(d["speed"])
+    except ValueError:
+        speed = 0.0
+    if 0 < speed < 5000:
+        return _warn(
+            row,
+            f"{where} is on a USB 2 link ({d['speed']} Mb/s)",
+            remedy="The RealSense needs USB 3 for colour + depth at full rate. Use a blue USB 3\n"
+            "port and a USB 3 cable, without a hub.",
+        )
+    return _ok(row, f"{where}, {d['speed']} Mb/s [realsense2_camera]")
 
 
 def _regenerate_chart(ctx: Context, path: str) -> List[CheckResult]:

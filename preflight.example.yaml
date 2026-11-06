@@ -29,6 +29,8 @@ arm_joint_states_topic: /wx250s/joint_states
 #   kind: usb        -> driven by multicam_server via usb_connector_chart.yml;
 #                       chart_key is its key there (and its topic name)
 #   v4l2_name        -> substring identifying it in `v4l2-ctl --list-devices`
+#   usb_name         -> substring of its USB product name (/sys/bus/usb/devices),
+#                       for cameras whose driver hides them from v4l2
 camera_catalog:
   - name: D435
     kind: realsense
@@ -36,6 +38,10 @@ camera_catalog:
     info_topic: /D435/color/camera_info
     serial: '217222067236'          # the D415; must match REALSENSE_SERIAL in docker-compose.yml
     v4l2_name: Intel(R) RealSense(TM) Depth Ca
+    # Found by USB product name, not v4l2: while the container runs, librealsense
+    # holds the camera and it disappears from v4l2-ctl. Matches any RealSense
+    # (D415, D435, ...); REALSENSE_SERIAL in docker-compose.yml picks the unit.
+    usb_name: RealSense
     width: 640
     height: 480
 
