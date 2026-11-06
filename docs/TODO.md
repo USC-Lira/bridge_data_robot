@@ -73,7 +73,8 @@ its own failures. Remaining risks of the same kind:
       work today (`pip freeze` inside a working container). Almost nothing is
       pinned, so each rebuild installs the newest versions, and packages that
       quietly drop Python 3.8 (the container's version) break the import of
-      `widowx_envs.widowx_env`. `moviepy` was the first (pinned to 1.0.3).
+      `widowx_envs.widowx_env`. So far: `moviepy` (pinned to 1.0.3) and `scipy`
+      (1.10.x, because the venv also sees Ubuntu's old system scipy).
 - [ ] The Interbotix script has no `set -e`, so any failure inside it is
       invisible. Consider running it with `bash -e`, or replacing it with the
       few steps we actually need.
@@ -93,3 +94,29 @@ in `docker-compose.yml`.
       217222067236, expected ..." instead of the driver retrying forever.
 - [ ] Remove `ENV REALSENSE_SERIAL` from `widowx_envs/Dockerfile` at the next
       planned rebuild; `docker-compose.yml` overrides it anyway.
+
+## Session metadata
+
+`run_data_collection.py` copies
+`widowx_envs/experiments/bridge_data_v2/collection_metadata.json` into every
+session's data folder, adding only `date_time`. The file is `{}`, so sessions
+record nothing about who collected them, what the task was, or the setup.
+Preflight warns about it (`container.collection_config.collection_metadata`).
+
+- [ ] Decide as a team which fields every session must record. Candidates:
+      task, operator, scene/objects, camera model and serial (the topics say
+      `/D435` but the camera is a D415), robot and gripper.
+- [ ] Fill `collection_metadata.json` with that template.
+- [ ] Make preflight check that the required fields are filled in, not just
+      that the file is non-empty.
+- [ ] Optionally have preflight fill in what it already knows (camera serial
+      from `docker-compose.yml`, robot model from its config), so people only
+      type the task and their name.
+
+## VR headset
+
+- [ ] The container has its own adb key (lost when the container is
+      recreated). If the container starts the adb server before the host does,
+      the headset asks for "Allow" again. Preflight starts it on the host first,
+      which avoids this in the normal flow; mounting the host's `~/.android`
+      into the container in `docker-compose.yml` would rule it out.
