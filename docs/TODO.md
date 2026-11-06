@@ -40,9 +40,12 @@ its own failures. Remaining risks of the same kind:
       `interbotix_ros_manipulators` is checked out to `noetic`). Pin all three
       to known-good commits.
 - [ ] The ROS apt key added in `widowx_envs/Dockerfile`
-      (`C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654`) was rotated in 2025. A
-      build without cache may fail at the ROS apt steps with `EXPKEYSIG`;
-      switch to the `ros-apt-source` package from the ROS install docs.
+      (`C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654`) expired in June 2025 and
+      was re-issued with the same fingerprint and a 2030 expiry. Whether
+      `apt-key adv` gets the new copy depends on the keyserver, so a build
+      without cache may fail with `EXPKEYSIG`. Switch to the `ros-apt-source`
+      package (1.3.0 has a `focal` build), and drop the Interbotix script's own
+      `apt-key` source, which would conflict with it.
 - [ ] Pin every package in `widowx_envs/requirements.txt` to the versions that
       work today (`pip freeze` inside a working container). Almost nothing is
       pinned, so each rebuild installs the newest versions, and packages that
@@ -88,6 +91,13 @@ Preflight warns about it (`container.collection_config.collection_metadata`).
       type the task and their name.
 
 ## VR headset
+
+- [ ] `datacollection.py` asks the operator to confirm that the RAIL Oculus
+      Teleoperation app is open. Check it over adb instead (e.g. the
+      foreground app from `adb shell dumpsys activity activities`). Needs the
+      app's package name, read from the headset first (`adb shell pm list
+      packages | grep -i rail`). Whether the headset faces the operator still
+      has to be asked.
 
 - [ ] The container has its own adb key (lost when the container is
       recreated). If the container starts the adb server before the host does,
