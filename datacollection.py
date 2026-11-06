@@ -11,8 +11,8 @@
    headset and that the headset is facing you.
 4. Starts run_data_collection.py with the same conf inside the container.
 
-When you are done, stop collection with Ctrl+C and the container with
-`python3 stop_container.py`.
+End the session from the headset (right joystick, then A); the script then
+offers to stop the container (stop_container.py). Ctrl+C also stops collection.
 
 Any preflight option can be passed through, e.g. --build, --no-generate,
 --config my_rig.yaml, -v.
@@ -184,6 +184,15 @@ def main() -> int:
 
     print("\nData collection ended.")
     print("Data is under", os.path.expanduser(config.dataset_root))
+    # Exit code 0 = ended cleanly (from the headset, or num_trajectories reached).
+    # After Ctrl+C or an error, do not offer it: the operator may want to look first.
+    if rc == 0 and ask("\nStop the robonet container now? "
+                       "(the arm goes to its sleep pose first, and you confirm before it stops)"):
+        stop_rc = subprocess.run([sys.executable, os.path.join(REPO_ROOT, "stop_container.py")],
+                                 cwd=REPO_ROOT).returncode
+        if stop_rc == 0:
+            print("Power the arm off and put the headset on its charger.")
+        return stop_rc
     print("When you are done for the day: python3 stop_container.py, then power the arm off\n"
           "and put the headset on its charger.")
     return rc
