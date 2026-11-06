@@ -8,6 +8,7 @@ class InterventionWidowX(VR_WidowX):
     def reset(self, itraj=None):
         self.task_stage = 0
         obs = super(VR_WidowX, self).reset(itraj=itraj)
+        self._move_to_control_start()  # LIRA: slow move to the conf's fixed axes
         start_key = 'handle'
         
         print('Place the object between gripper fingers and Press A to close it. Then press {} button to start recording.'.format(start_key))

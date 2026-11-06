@@ -168,6 +168,13 @@ control={"x": "teleop", "y": "teleop", "z": 0.12,
          "roll": "hold", "pitch": "hold", "yaw": "teleop", "gripper": "teleop"},
 ```
 
+Fixed numbers are reached **before** recording: after going to neutral, the
+arm moves there slowly (about 5 cm/s and 30°/s, at least 2 s) and only then
+waits for the grip button, so starting a trajectory never jumps. It does the
+same after **B** (neutral). If the fixed values are out of reach, it says so.
+Make sure the path from neutral to that pose is clear. A fixed **gripper**
+value is applied when recording starts.
+
 Whatever is locked, every dataset records the same 7-number actions
 (xyz + roll/pitch/yaw deltas + gripper); locked axes are recorded as "no
 change". Preflight (`host.conf_settings`) checks the conf before anything

@@ -242,8 +242,9 @@ def check_settings(cameras=None, depth=False, action_mode=None, control=None, me
         warnings += angle_warnings(resolved)
         if any(isinstance(resolved[a], (int, float)) and not isinstance(resolved[a], bool)
                for a in POSITION_AXES):
-            warnings.append("a fixed x/y/z is an absolute position: the arm moves there on the first "
-                            "step, so keep it close to the start pose.")
+            warnings.append("a fixed x/y/z is an absolute position in the robot's base frame: before "
+                            "each trajectory the arm moves there slowly (5 cm/s) from neutral; make "
+                            "sure that path is clear.")
 
     if not isinstance(metadata, dict):
         errors.append("metadata is required, e.g. metadata={'task': '...', 'operator': '...'}")
@@ -312,6 +313,8 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
     topics = topics_for(cameras, depth)
     env_params = dict(copy.deepcopy(ENV_DEFAULTS))
     env_params["skip_move_to_neutral"] = not neutral_before_each
+    # The env moves slowly to the fixed axes before each trajectory.
+    env_params["control"] = resolved
     env_params["camera_topics"] = [IMTopic(t) for t in topics["camera_topics"]]
     if topics.get("depth_camera_topics"):
         env_params["depth_camera_topics"] = [IMTopic(t, dtype="16UC1") for t in topics["depth_camera_topics"]]
