@@ -2,6 +2,7 @@ import argparse
 import importlib.util  # replaced: import imp due to deprecation
 
 import json
+import sys
 from widowx_envs.utils.utils import ask_confirm, save_config
 import datetime
 import os
@@ -97,3 +98,16 @@ class DataCollectionManager(object):
 
 if __name__ == '__main__':
     DataCollectionManager().run()
+    # LIRA: collection is over (ended from the headset, or num_trajectories
+    # reached) and every trajectory is already written: saving is synchronous.
+    # Background threads (the VR reader's adb stream, ROS) can still keep the
+    # process alive, so exit explicitly instead of waiting on them.
+    print('Data collection finished.')
+    try:
+        import rospy
+        rospy.signal_shutdown('data collection finished')
+    except Exception:
+        pass
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
