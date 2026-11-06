@@ -128,6 +128,53 @@ Use your own config file — there are examples in
 `widowx_envs/experiments/bridge_data_v2/`. **Copy one to
 `conf_<yourname>.py`; do not edit `conf.py`.**
 
+#### The config file
+
+A conf only states what differs between projects; everything else comes from
+`widowx_envs/widowx_envs/simple_conf.py`:
+
+```python
+from widowx_envs.simple_conf import make_config
+
+config = make_config(
+    cameras=["D435"],            # D435 (the RealSense), blue, yellow, wrist
+    depth=True,                  # also record RealSense depth
+    action_mode="3trans3rot",    # see below
+    metadata={"task": "put the cup in the bowl", "operator": "Hugo"},  # both required
+    neutral_before_each=True,    # optional: arm to neutral before every trajectory (default True)
+    # num_trajectories=50,       # optional: default is no limit, end the session from the headset
+    # max_seconds_per_trajectory=100,
+    # env={...}, agent={...}, collection={...}   # override any other setting
+)
+```
+
+**`action_mode`** (required) decides which parts of the arm follow your hand:
+
+| `action_mode` | Follows the hand | Locked |
+|---|---|---|
+| `3trans3rot` | x, y, z, roll, pitch, yaw, gripper | – |
+| `3trans1rot` | x, y, z, yaw, gripper | roll, pitch at the default orientation |
+| `3trans` | x, y, z, gripper | roll, pitch, yaw at the default orientation |
+| `custom` | your choice, with `control={...}` | your choice |
+
+With `custom`, give **every** axis (`x y z roll pitch yaw gripper`) one of:
+`"teleop"` (follows your hand / the trigger), `"hold"` (stays where it was when
+the trajectory started), or a number (meters for x/y/z, degrees from the
+default orientation for roll/pitch/yaw, 0 closed .. 1 open for the gripper).
+
+```python
+action_mode="custom",
+control={"x": "teleop", "y": "teleop", "z": 0.12,
+         "roll": "hold", "pitch": "hold", "yaw": "teleop", "gripper": "teleop"},
+```
+
+Whatever is locked, every dataset records the same 7-number actions
+(xyz + roll/pitch/yaw deltas + gripper); locked axes are recorded as "no
+change". Preflight (`host.conf_settings`) checks the conf before anything
+starts: a preset combined with `control`, a missing axis, an unknown camera,
+an empty task or operator, or a typo in an override all fail there with the
+exact problem.
+
 Then:
 
 - Make sure the headset is **facing you**, and keep the controller inside its
@@ -142,7 +189,7 @@ prints this card):
 | **Trigger** (index finger) | | closes the gripper; how far you pull = how closed | |
 | **B** | moves the arm to its **neutral** pose | **ends** the trajectory | |
 | **A** | | | **save** it |
-| **Right joystick** (press) | | | **discard** it |
+| **Right joystick** (press) | **end the session** (then **A** to confirm, grip to keep collecting) | | **discard** it |
 
 A trajectory also ends by itself after the conf's `T` steps. Move smoothly:
 a sudden jump prints `delta transform too large!` and pauses in the terminal;

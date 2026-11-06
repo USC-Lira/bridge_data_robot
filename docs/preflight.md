@@ -90,6 +90,7 @@ deadline:
 | name | catches |
 |---|---|
 | `host.repo_root` | running from the wrong directory |
+| `host.conf_settings` | the `--conf` file's `make_config(...)`: `action_mode` / `control` agree (a preset with a `control` dict, `custom` without one, a missing axis, a bad value), known cameras, `depth` only with a RealSense, `task`/`operator` filled in, typos in `env`/`agent`/`collection` overrides. Same rules `make_config` applies when collection starts (`simple_conf.check_settings`) |
 | `host.conf_cameras` | which cameras `--conf` records; a conf topic no known camera publishes |
 | `host.docker_cli` | docker / compose v2 plugin missing |
 | `host.docker_permissions` | the `usermod -aG docker` problem from the README |

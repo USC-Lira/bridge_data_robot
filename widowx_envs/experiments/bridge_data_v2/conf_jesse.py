@@ -1,52 +1,22 @@
-""" Hyperparameters for Large Scale Data Collection """
-import os.path
+"""Data collection config: RealSense colour + depth, full 6-DoF teleop.
 
-BASE_DIR = '/'.join(str.split(__file__, '/')[:-1])
-current_dir = os.path.dirname(os.path.realpath(__file__))
+Only what differs between projects is set here; everything else uses the
+defaults in widowx_envs/simple_conf.py. Run it with:
 
-from multicam_server.topic_utils import IMTopic
-from widowx_envs.widowx_env import VR_WidowX, WidowXEnv
-from widowx_envs.control_loops import TimedLoop
-from widowx_envs.policies.vr_teleop_policy import VRTeleopPolicy
-from widowx_envs.policies.policy import NullPolicy
+    python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+"""
+from widowx_envs.simple_conf import make_config
 
-env_params = {
-    'camera_topics': [IMTopic('/D435/color/image_raw'),
-                    #IMTopic('/blue/image_raw'),
-                    ],
-    'depth_camera_topics': [IMTopic('/D435/depth/image_rect_raw', dtype='16UC1')],
-    'gripper_attached': 'custom',
-    'skip_move_to_neutral': False,
-    'move_to_rand_start_freq': -1,
-    'fix_zangle': 0.1,
-    'move_duration': 0.2,
-    'adaptive_wait': True,
-    'action_clipping': None
-}
-
-agent = {
-    'type': TimedLoop,
-    'env': (VR_WidowX, env_params),
-    'recreate_env': (False, 1),
-    'T': 500,
-    'image_height': 480,
-    'image_width': 640,
-    'make_final_gif': False,
-    'video_format': 'mp4',
-}
-
-policy = {
-    'type': VRTeleopPolicy,
-}
-
-config = {
-    'current_dir' : current_dir,
-    'collection_metadata' : current_dir + '/collection_metadata.json',
-    'start_index':0,
-    'end_index': 500,
-    'agent': agent,
-    'policy': policy,
-    'save_format': ['raw'],
-    'make_diagnostics': False,
-    'record_floor_height': False
-}
+config = make_config(
+    cameras=["D435"],            # D435 (the RealSense), blue, yellow, wrist
+    depth=True,                  # also record RealSense depth
+    action_mode="3trans3rot",    # 3trans3rot, 3trans1rot, 3trans, or custom (+ control={...})
+    metadata={
+        "task": "",              # what the operator is asked to do, e.g. "put the cup in the bowl"
+        "operator": "",          # who is collecting
+    },
+    neutral_before_each=True,    # arm returns to neutral before every trajectory
+    # num_trajectories=50,       # optional: stop after this many (default: until you end it from the headset)
+    # max_seconds_per_trajectory=100,
+    # env={...}, agent={...}, collection={...}  # override any other setting, see simple_conf.py
+)

@@ -334,8 +334,18 @@ def collection_config(ctx: Context) -> List[CheckResult]:
 
     results = [_ok(f"{name}.import", f"{os.path.basename(conf_path)} imports cleanly")]
 
+    # Short-form confs (simple_conf.make_config) carry the metadata inline.
+    if "metadata" in config:
+        from widowx_envs.simple_conf import REQUIRED_METADATA
+        md = config["metadata"] or {}
+        empty = [k for k in REQUIRED_METADATA if not str(md.get(k, "")).strip()]
+        if empty:
+            results.append(_fail(f"{name}.metadata", f"metadata needs {', '.join(empty)} filled in"))
+        else:
+            results.append(_ok(f"{name}.metadata",
+                               ", ".join(f"{k}: {md[k]}" for k in REQUIRED_METADATA)))
     # run() asserts on this key before doing anything else.
-    if "collection_metadata" not in config:
+    elif "collection_metadata" not in config:
         results.append(
             _fail(
                 f"{name}.collection_metadata",

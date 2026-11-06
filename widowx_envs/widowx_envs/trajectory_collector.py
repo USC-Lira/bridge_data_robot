@@ -64,9 +64,16 @@ class TrajectoryCollector(Configurable):
         return default_dict
 
     def run(self):
-        for i in range(self._hp.start_index, self._hp.end_index+1):
-            for policy in self.policies:
-                self.take_sample(i, policy)
+        # LIRA: the operator can end the session from the headset between
+        # trajectories (VR_WidowX.reset raises SessionEnd); everything saved
+        # so far stays saved.
+        from widowx_envs.utils.exceptions import SessionEnd
+        try:
+            for i in range(self._hp.start_index, self._hp.end_index+1):
+                for policy in self.policies:
+                    self.take_sample(i, policy)
+        except SessionEnd:
+            print('Session ended from the headset.')
 
     @timed('traj sample time: ')
     def take_sample(self, index, policy):

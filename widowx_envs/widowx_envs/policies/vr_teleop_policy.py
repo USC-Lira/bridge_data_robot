@@ -32,12 +32,18 @@ class VRTeleopPolicy(Policy):
         self.reference_robot_transform = None
         self.internal_counter = 0
         self.internal_counter_default_policy = 0
+        self._hold = None
 
     def _default_hparams(self):
         dict = AttrDict(
             load_file="",
             type=None,
             policy_T=None,
+            # LIRA: per-axis control from simple_conf.make_config: for each of
+            # x y z roll pitch yaw gripper, "teleop", "hold" or a fixed value
+            # (m / degrees from the default orientation / 0 closed..1 open).
+            # None keeps the original behaviour (env action_mode only).
+            control=None,
         )
         default_dict = super(Policy, self)._default_hparams()
         default_dict.update(dict)
@@ -99,14 +105,17 @@ class VRTeleopPolicy(Policy):
             new_robot_transform = self.zero_out_pitchroll(new_robot_transform)
         if self.action_space == '3trans':
             new_robot_transform = self.zero_out_yawpitchroll(new_robot_transform)
+        des_gripper_position = (1 - trigger_continuous)
+        # LIRA: lock axes per the conf's control before the delta is computed,
+        # so locked axes are recorded as "no change".
+        new_robot_transform, des_gripper_position = self.apply_control(new_robot_transform, des_gripper_position)
+
         publish_transform(new_robot_transform, 'des_robot_transform')
 
         prev_target_pos, _ = self.env.get_target_state()
         delta_robot_transform = new_robot_transform.dot(tr.TransInv(prev_target_pos))
         publish_transform(delta_robot_transform, 'delta_robot_transform')
         self.prev_commanded_transform = new_robot_transform
-
-        des_gripper_position = (1 - trigger_continuous)
         actions = tr.transform2action_local(delta_robot_transform, des_gripper_position, self.env._controller.get_cartesian_pose()[:3])
 
         if self.env._hp.action_mode == '3trans1rot':
@@ -139,7 +148,7 @@ class VRTeleopPolicy(Policy):
 
     def get_zero_action(self):
         if self.env._hp.action_mode == '3trans3rot':
-            actions = np.concatenate([np.zeros(6), np.array([1])])
+            actions = np.concatenate([np.zeros(6), np.array([self._idle_gripper()])])
         elif self.env._hp.action_mode == '3trans1rot':
             actions = np.concatenate([np.zeros(4), np.array([1])])
         elif self.env._hp.action_mode == '3trans':
@@ -147,6 +156,60 @@ class VRTeleopPolicy(Policy):
         else:
             raise NotImplementedError
         return {'actions': actions, 'new_robot_transform':np.eye(4), 'delta_robot_transform': np.eye(4), 'policy_type': 'VRTeleopPolicy'}
+
+    # -- LIRA: per-axis control --------------------------------------------- #
+
+    def _euler_from_default(self, rot):
+        """roll, pitch, yaw (rad) of ``rot`` relative to the default gripper orientation."""
+        return tr.rotationMatrixToEulerAngles(rot.dot(self.env._controller.default_rot.transpose()),
+                                              check_error_thresh=1e-5)
+
+    def _capture_hold(self):
+        transform, gripper = self.env.get_target_state()
+        rot, xyz = tr.TransToRp(transform)
+        euler = self._euler_from_default(rot)
+        g = float(np.asarray(gripper).ravel()[0]) if np.size(gripper) else 1.0
+        self._hold = dict(x=xyz[0], y=xyz[1], z=xyz[2], roll=euler[0], pitch=euler[1], yaw=euler[2], gripper=g)
+
+    def apply_control(self, transform, gripper):
+        """Replace locked axes of the commanded pose (and gripper) per self._hp.control."""
+        control = self._hp.control
+        if not control:
+            return transform, gripper
+        if self._hold is None:
+            self._capture_hold()
+        rot, xyz = tr.TransToRp(transform)
+        xyz = np.array(xyz, dtype=float)
+        for i, axis in enumerate(("x", "y", "z")):
+            v = control[axis]
+            if v == "hold":
+                xyz[i] = self._hold[axis]
+            elif v != "teleop":
+                xyz[i] = float(v)
+        if any(control[a] != "teleop" for a in ("roll", "pitch", "yaw")):
+            euler = np.array(self._euler_from_default(rot), dtype=float)
+            for i, axis in enumerate(("roll", "pitch", "yaw")):
+                v = control[axis]
+                if v == "hold":
+                    euler[i] = self._hold[axis]
+                elif v != "teleop":
+                    euler[i] = np.deg2rad(float(v))
+            rot = tr.eulerAnglesToRotationMatrix(euler).dot(self.env._controller.default_rot)
+        v = control["gripper"]
+        if v == "hold":
+            gripper = self._hold["gripper"]
+        elif v != "teleop":
+            gripper = float(v)
+        return tr.RpToTrans(rot, xyz), gripper
+
+    def _idle_gripper(self):
+        """Gripper command while the grip button is released (originally: open)."""
+        control = self._hp.control
+        if not control or control["gripper"] == "teleop":
+            return 1
+        if self._hold is None:
+            self._capture_hold()
+        return self._hold["gripper"] if control["gripper"] == "hold" else float(control["gripper"])
 
     def zero_out_pitchroll(self, new_robot_transform):
         rot, xyz = tr.TransToRp(new_robot_transform)
@@ -175,6 +238,7 @@ class VRTeleopPolicy(Policy):
         self.internal_counter = 0
         self.internal_counter_default_policy = 0
         self.prev_vr_transform = None  # used for self.act_use_deltas only
+        self._hold = None  # LIRA: captured again at the start of the next trajectory
 
         # used for act_use_fixed_reference only:
         self.prev_handle_press = False
