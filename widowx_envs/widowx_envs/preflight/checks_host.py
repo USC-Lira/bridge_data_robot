@@ -732,6 +732,21 @@ def vr_headset(ctx: Context) -> CheckResult:
             remedy="Plug the Quest into the desktop with the USB-C cable, put it on, and\n"
             "accept the 'Allow USB debugging' prompt inside the headset.",
         )
+    no_perm = [s for s, st in devices if st.startswith("no permissions")]
+    if no_perm:
+        # A Linux USB permission problem, not the in-headset prompt: adb cannot
+        # even open the device, so the headset never gets to ask.
+        return _fail(
+            name,
+            "headset found, but this user may not open its USB device (no permissions)",
+            remedy="Add a udev rule for Meta/Oculus devices (USB vendor 2833), once:\n"
+            "  echo 'SUBSYSTEM==\"usb\", ATTR{idVendor}==\"2833\", MODE=\"0664\", GROUP=\"plugdev\"' \\\n"
+            "    | sudo tee /etc/udev/rules.d/51-oculus.rules\n"
+            "  sudo udevadm control --reload-rules && sudo udevadm trigger\n"
+            "  groups | grep -q plugdev || sudo usermod -aG plugdev $USER   (then log out/in)\n"
+            "Then replug the headset and run: adb kill-server; adb devices",
+            devices=devices,
+        )
     unauthorized = [s for s, st in devices if st != "device"]
     if unauthorized:
         return _fail(

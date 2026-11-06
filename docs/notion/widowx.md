@@ -208,6 +208,7 @@ python examples/02_finetune_on_lira_data.py \
 |---|---|---|
 | `module 'numpy' has no attribute 'typeDict'` | old scipy vs new numpy | `pip install --upgrade scipy` **inside the container** |
 | `Device not found. Run 'adb devices'` at collection start | Quest not connected/authorised | Connect it, accept the in-headset USB prompt. Expected before the headset is attached. |
+| `adb devices` shows `no permissions` | No udev rule for the Quest (USB vendor `2833`), so the user cannot open it | Add `/etc/udev/rules.d/51-oculus.rules` (preflight's `host.vr_headset` prints the exact commands), replug, `adb kill-server` |
 | VR controller does nothing | RAIL Oculus Teleoperation app not running, or guardian not drawn | Open the app in the headset, redraw boundaries |
 | `No RealSense devices were found!` | D435 not enumerated, wrong serial in `widowx_rs.launch`, or the D435 is **also** listed in `usb_connector_chart.yml` so two drivers fight over it | Replug (USB 3), check the serial, remove the D435 line from the chart |
 | `PermissionError: [Errno 13]` from docker | user not in the `docker` group | `sudo groupadd docker; sudo usermod -aG docker $USER`, then **reboot** |
