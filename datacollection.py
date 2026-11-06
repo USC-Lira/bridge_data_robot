@@ -30,6 +30,34 @@ from widowx_envs.preflight import preflight, session  # noqa: E402
 from widowx_envs.preflight.config import PreflightConfig  # noqa: E402
 
 
+# From widowx_envs/widowx_env.py (VR_WidowX) and policies/vr_teleop_policy.py.
+# Everything is on the RIGHT controller.
+CONTROLS = """
+================  VR CONTROLS (right controller)  ================
+ Grip button (middle finger)
+   - Press to START recording a trajectory.
+   - HOLD it to move the arm: the arm follows your hand, position
+     and rotation (wrist turns with your hand). Release it and the
+     arm stops; move your hand freely, press again to continue from
+     there (like lifting a mouse off the table).
+ Trigger (index finger)
+   - Closes the gripper; how far you pull = how closed it is.
+     Release to open.
+ B button
+   - Before recording: moves the arm to its neutral pose.
+   - While recording: ENDS the trajectory.
+ After each trajectory:
+   - A button               = SAVE it
+   - Press the right joystick = DISCARD it
+ Notes
+   - A trajectory also ends by itself after the conf's T steps.
+   - Move smoothly. A sudden jump prints "delta transform too
+     large!" and pauses in this terminal: type c and press Enter.
+   - Ctrl+C in this terminal stops data collection.
+=================================================================
+"""
+
+
 def ask(question: str) -> bool:
     try:
         return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
@@ -67,8 +95,12 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("conf", help="experiment config, e.g. widowx_envs/experiments/bridge_data_v2/conf_jesse.py")
     p.add_argument("--config", help="preflight config (.yaml/.json), if your rig differs from the defaults")
+    p.add_argument("--controls", action="store_true", help="only print the VR controls and exit")
     p.add_argument("-y", "--yes", action="store_true",
                    help="do not ask whether to start collecting (the headset confirmation is still asked)")
+    if "--controls" in sys.argv[1:]:
+        print(CONTROLS)
+        return 0
     args, passthrough = p.parse_known_args()
 
     if not os.path.exists(args.conf):
@@ -94,9 +126,8 @@ def main() -> int:
 
     config = PreflightConfig.load(args.config)
     cmd = collection_command(args.conf, config)
-    print(f"\nStarting data collection with {os.path.basename(args.conf)}.")
-    print("Hold the button under your middle finger and move your hand to move the arm.")
-    print("A = save trajectory, right joystick = discard. Ctrl+C here to stop.\n", flush=True)
+    print(CONTROLS)
+    print(f"Starting data collection with {os.path.basename(args.conf)}.\n", flush=True)
     try:
         rc = subprocess.run(cmd, cwd=REPO_ROOT, env=session.compose_env(REPO_ROOT, config)).returncode
     except KeyboardInterrupt:

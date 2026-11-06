@@ -130,10 +130,23 @@ Use your own config file — there are examples in
 
 Then:
 
-- Make sure the headset is **facing you**.
-- Keep the controller inside the headset's field of view.
-- To move the arm: hold the button under your middle finger and move your hand.
-- **A** = save trajectory. **Right joystick** = discard trajectory.
+- Make sure the headset is **facing you**, and keep the controller inside its
+  field of view.
+
+**VR controls** (right controller; `python3 datacollection.py --controls`
+prints this card):
+
+| Control | Before recording | While recording | After a trajectory |
+|---|---|---|---|
+| **Grip** (middle finger) | press to **start** recording | **hold** to move the arm: it follows your hand, position and rotation. Release to stop; move your hand, press again to continue from there | |
+| **Trigger** (index finger) | | closes the gripper; how far you pull = how closed | |
+| **B** | moves the arm to its **neutral** pose | **ends** the trajectory | |
+| **A** | | | **save** it |
+| **Right joystick** (press) | | | **discard** it |
+
+A trajectory also ends by itself after the conf's `T` steps. Move smoothly:
+a sudden jump prints `delta transform too large!` and pauses in the terminal;
+type `c` and Enter to continue.
 
 ### Where the data lands
 
