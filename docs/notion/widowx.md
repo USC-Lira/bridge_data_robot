@@ -76,15 +76,21 @@ Details and how to add checks: [`docs/preflight.md`](https://github.com/USC-Lira
 
 ```bash
 cd ~/bridge_data_robot
+# first session of the day: check the rig and start the container too
+python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py --preflight
+# container already running (e.g. the next session): collect straight away
 python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py
 ```
 
-It runs preflight with that conf (which starts the container if needed). If
-preflight ends without a FAIL, it asks whether to start collecting, then asks
-you to confirm the **RAIL Oculus Teleoperation app is open** in the headset and
-the **headset is facing you**, and starts `run_data_collection.py` with the
-same conf. `Ctrl+C` stops collection; `python3 stop_container.py` stops the
-container. The two windows below are what it does for you.
+With `--preflight` it first runs preflight with that conf (which starts the
+container if needed), and only continues if there is no FAIL. Without it, it
+skips the checks and only makes sure the container is running. Either way it
+then asks whether to start collecting, asks you to confirm the **RAIL Oculus
+Teleoperation app is open** in the headset and the **headset is facing you**,
+and starts `run_data_collection.py` with the same conf. End the session from
+the headset (right joystick, then A) and it offers to stop the container.
+Preflight options go after `--preflight` (e.g. `--preflight --build`). The two
+windows below are what it does for you.
 
 ### Window 1 — preflight starts the robot
 
