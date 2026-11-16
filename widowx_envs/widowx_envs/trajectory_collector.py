@@ -64,9 +64,25 @@ class TrajectoryCollector(Configurable):
         return default_dict
 
     def run(self):
-        for i in range(self._hp.start_index, self._hp.end_index+1):
-            for policy in self.policies:
-                self.take_sample(i, policy)
+        # LIRA: the operator can end the session from the headset between
+        # trajectories (VR_WidowX.reset raises SessionEnd); everything saved
+        # so far stays saved.
+        from widowx_envs.utils.exceptions import SessionEnd
+        try:
+            for i in range(self._hp.start_index, self._hp.end_index+1):
+                for policy in self.policies:
+                    self.take_sample(i, policy)
+        except SessionEnd:
+            print('Session ended from the headset.')
+        finally:
+            # LIRA: OculusReader streams adb logcat in a non-daemon thread that
+            # would keep the process alive after collection; stop it.
+            reader = getattr(getattr(self.agent, 'env', None), 'oculus_reader', None)
+            if reader is not None and hasattr(reader, 'stop'):
+                try:
+                    reader.stop()
+                except Exception as exc:
+                    print('could not stop the VR reader cleanly: {}'.format(exc))
 
     @timed('traj sample time: ')
     def take_sample(self, index, policy):

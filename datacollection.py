@@ -11,8 +11,8 @@
    headset and that the headset is facing you.
 4. Starts run_data_collection.py with the same conf inside the container.
 
-When you are done, stop collection with Ctrl+C and the container with
-`python3 stop_container.py`.
+End the session from the headset (right joystick, then A); the script then
+offers to stop the container (stop_container.py). Ctrl+C also stops collection.
 
 Any preflight option can be passed through, e.g. --build, --no-generate,
 --config my_rig.yaml, -v.
@@ -49,8 +49,11 @@ CONTROLS = """
  After each trajectory:
    - A button               = SAVE it
    - Press the right joystick = DISCARD it
+ End the session (while waiting to start the next trajectory):
+   - Press the right joystick, then A to confirm
+     (or the grip button to keep collecting).
  Notes
-   - A trajectory also ends by itself after the conf's T steps.
+   - A trajectory also ends by itself after the conf's time limit.
    - Move smoothly. A sudden jump prints "delta transform too
      large!" and pauses in this terminal: type c and press Enter.
    - Ctrl+C in this terminal stops data collection.
@@ -58,17 +61,52 @@ CONTROLS = """
 """
 
 
+def controls_card(conf_path=None) -> str:
+    """The controls card, plus which axes this conf locks (if it uses make_config)."""
+    card = CONTROLS
+    if not conf_path or not os.path.exists(conf_path):
+        return card
+    try:
+        from widowx_envs.preflight.config import read_make_config
+        from widowx_envs.simple_conf import describe_control, resolve_control
+        mc = read_make_config(conf_path)
+        if not mc or "action_mode" in mc.get("_not_literal", []):
+            return card
+        control, errors = resolve_control(mc.get("action_mode"), mc.get("control"))
+    except Exception:
+        return card
+    if errors or not control:
+        return card
+    locked = describe_control(control)
+    lines = [f" This conf ({os.path.basename(conf_path)}, action_mode={mc.get('action_mode')}):"]
+    if locked:
+        lines += [f"   - {l}" for l in locked]
+    else:
+        lines.append("   - every axis follows your hand")
+    return card.rstrip("=\n") + "\n" + "\n".join(lines) + "\n" + "=" * 65 + "\n"
+
+
 CONTROLS_WINDOW_PID = os.path.expanduser("~/.cache/widowx_preflight/controls_window.pid")
 
 
-def open_controls_window():
+def open_controls_window(conf_path=None):
     """Show the controls card in its own window, to keep in view while collecting."""
+    conf_arg = f" {session._sh(os.path.abspath(conf_path))}" if conf_path else ""
     inner = (
-        f"python3 {session._sh(os.path.abspath(__file__))} --controls; "
+        f"python3 {session._sh(os.path.abspath(__file__))} --controls{conf_arg}; "
         "echo 'This window closes when data collection ends.'; read -r -p ''"
     )
     return session.open_window("WidowX VR controls", inner, CONTROLS_WINDOW_PID, REPO_ROOT,
-                               size="68x32")
+                               size="68x40")
+
+
+def flush_typed_input() -> None:
+    """Drop keys typed while collection ran, so they do not answer the next question."""
+    try:
+        import termios
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:
+        pass
 
 
 def ask(question: str) -> bool:
@@ -112,7 +150,8 @@ def main() -> int:
     p.add_argument("-y", "--yes", action="store_true",
                    help="do not ask whether to start collecting (the headset confirmation is still asked)")
     if "--controls" in sys.argv[1:]:
-        print(CONTROLS)
+        rest = [a for a in sys.argv[1:] if a != "--controls" and not a.startswith("-")]
+        print(controls_card(rest[0] if rest else None))
         return 0
     args, passthrough = p.parse_known_args()
 
@@ -139,11 +178,11 @@ def main() -> int:
 
     config = PreflightConfig.load(args.config)
     cmd = collection_command(args.conf, config)
-    window = open_controls_window()
+    window = open_controls_window(args.conf)
     if window:
         print("\nThe VR controls are in a separate 'WidowX VR controls' window.")
     else:
-        print(CONTROLS)  # no desktop to open a window on
+        print(controls_card(args.conf))  # no desktop to open a window on
     print(f"Starting data collection with {os.path.basename(args.conf)}.\n", flush=True)
     try:
         rc = subprocess.run(cmd, cwd=REPO_ROOT, env=session.compose_env(REPO_ROOT, config)).returncode
@@ -152,8 +191,19 @@ def main() -> int:
     finally:
         session.close_window(CONTROLS_WINDOW_PID)
 
-    print("\nData collection ended.")
+    how = {0: "ended normally", 130: "stopped with Ctrl+C"}.get(rc, f"exited with code {rc}")
+    print(f"\nData collection ended ({how}).")
     print("Data is under", os.path.expanduser(config.dataset_root))
+    if rc not in (0, 130):
+        print("If that was not expected, the container output window shows what happened.")
+    flush_typed_input()
+    if ask("\nStop the robonet container now? "
+           "(the arm goes to its sleep pose first, and you confirm before it stops)"):
+        stop_rc = subprocess.run([sys.executable, os.path.join(REPO_ROOT, "stop_container.py")],
+                                 cwd=REPO_ROOT).returncode
+        if stop_rc == 0:
+            print("Power the arm off and put the headset on its charger.")
+        return stop_rc
     print("When you are done for the day: python3 stop_container.py, then power the arm off\n"
           "and put the headset on its charger.")
     return rc

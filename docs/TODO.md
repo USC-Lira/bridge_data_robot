@@ -71,24 +71,28 @@ in `docker-compose.yml`.
       217222067236, expected ..." instead of the driver retrying forever.
 - [ ] Remove `ENV REALSENSE_SERIAL` from `widowx_envs/Dockerfile` at the next
       planned rebuild; `docker-compose.yml` overrides it anyway.
+- [ ] Possible follow-up: support **two RealSense cameras**. Today only one is
+      wired up: `widowx_rs.launch` starts one driver group (`camera1`, one
+      serial), `run.sh`/`docker-compose.yml` pass one `REALSENSE_SERIAL`, and
+      preflight's catalog has one RealSense (it warns when it sees more). Needs
+      a second driver group (`camera2`, `serial_no_camera2`), a
+      `REALSENSE_SERIAL_2`, a second catalog entry, and preflight expecting two.
+      Put them on different USB 3 controllers (colour + depth on two cameras is
+      a lot of bandwidth), and name them by position (`realsense_front`,
+      `realsense_side`) rather than by model.
 
 ## Session metadata
 
-`run_data_collection.py` copies
-`widowx_envs/experiments/bridge_data_v2/collection_metadata.json` into every
-session's data folder, adding only `date_time`. The file is `{}`, so sessions
-record nothing about who collected them, what the task was, or the setup.
-Preflight warns about it (`container.collection_config.collection_metadata`).
+Short-form confs (`simple_conf.make_config`) carry the metadata inline:
+`task` and `operator` are required, and preflight (`host.conf_settings`) and
+the container check fail while they are empty. Each session folder also gets
+`action_mode`, the resolved `control`, the cameras and the action format.
 
-- [ ] Decide as a team which fields every session must record. Candidates:
-      task, operator, scene/objects, camera model and serial (the topics say
-      `/D435` but the camera is a D415), robot and gripper.
-- [ ] Fill `collection_metadata.json` with that template.
-- [ ] Make preflight check that the required fields are filled in, not just
-      that the file is non-empty.
-- [ ] Optionally have preflight fill in what it already knows (camera serial
-      from `docker-compose.yml`, robot model from its config), so people only
-      type the task and their name.
+- [ ] Decide as a team whether more fields should be required (scene/objects,
+      ...), and add them to `REQUIRED_METADATA` in `simple_conf.py`.
+- [ ] Have preflight add what it already knows (RealSense model and serial from
+      `docker-compose.yml`, robot model from its config), so sessions record
+      which camera was used even though the topics say `/D435`.
 
 ## VR headset
 

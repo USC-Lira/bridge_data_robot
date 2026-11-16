@@ -1,53 +1,17 @@
-""" Hyperparameters for Large Scale Data Collection """
-import os.path
+"""Data collection config: intervention environment, position-only control, blue webcam.
 
-BASE_DIR = '/'.join(str.split(__file__, '/')[:-1])
-current_dir = os.path.dirname(os.path.realpath(__file__))
+Uses InterventionWidowX (press A to close the gripper on an object before
+recording). Its own waiting loop has no "end session" button: stop with Ctrl+C.
+Actions are now recorded in the common 7-number format (rotation deltas are 0);
+sessions recorded before this change used 4 numbers.
+"""
+from widowx_envs.simple_conf import make_config
 
-from multicam_server.topic_utils import IMTopic
-from widowx_envs.widowx_env import VR_WidowX
-from widowx_envs.widowx_intervention_env import InterventionWidowX
-from widowx_envs.control_loops import TimedLoop
-from widowx_envs.policies.vr_teleop_policy import VRTeleopPolicy
-
-env_params = {
-    'camera_topics': [IMTopic('/blue/image_raw')
-                      ],
-    # 'depth_camera_topics': [IMTopic('/D435/depth/image_rect_raw', dtype='16UC1')],
-    'gripper_attached': 'custom',
-    'skip_move_to_neutral': False,
-    'move_to_rand_start_freq': -1,
-    'fix_zangle': 0.1,
-    'move_duration': 0.2,
-    'adaptive_wait': True,
-    'action_clipping': None,
-    'action_mode': '3trans',
-    'start_state': [0.3, 0.0, 0.15, 0, 0, 0, 1],
-}
-
-agent = {
-    'type': TimedLoop,
-    'env': (InterventionWidowX, env_params),
-    'recreate_env': (False, 1),
-    'T': 500,
-    'image_height': 480,
-    'image_width': 640,
-    'make_final_gif': False,
-    'video_format': 'mp4',
-}
-
-policy = {
-    'type': VRTeleopPolicy,
-}
-
-config = {
-    'current_dir' : current_dir,
-    'collection_metadata' : current_dir + '/collection_metadata.json',
-    'start_index':0,
-    'end_index': 500,
-    'agent': agent,
-    'policy': policy,
-    'save_format': ['raw'],
-    'make_diagnostics': False,
-    'record_floor_height': False
-}
+config = make_config(
+    cameras=["blue"],
+    action_mode="3trans",        # roll, pitch, yaw fixed at the default orientation
+    environment="intervention",
+    metadata={"task": "", "operator": ""},
+    neutral_before_each=True,
+    env={"start_state": [0.3, 0.0, 0.15, 0, 0, 0, 1]},
+)

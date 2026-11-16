@@ -174,7 +174,11 @@ class VR_WidowX(WidowXEnv):
     def _default_hparams(self):
         default_dict = {
             'num_task_stages': 1,
-            'make_oculus_reader': True
+            'make_oculus_reader': True,
+            # LIRA: per-axis control from simple_conf.make_config (also given to
+            # the teleop policy). Used here to move slowly to the fixed values
+            # before recording, instead of jumping there on the first step.
+            'control': None,
 
         }
         parent_params = super(VR_WidowX, self)._default_hparams()
@@ -201,16 +205,70 @@ class VR_WidowX(WidowXEnv):
     def reset(self, itraj=None):
         self.task_stage = 0
         obs = super(VR_WidowX, self).reset(itraj=itraj)
+        self._move_to_control_start()
         start_key = 'handle'
-        print('waiting for {} button press to start recording. Press B to go to neutral.'.format(start_key))
+        print('waiting for {} button press to start recording. Press B to go to neutral, '
+              'press the right joystick to end the session.'.format(start_key))
         buttons = self.get_vr_buttons()
+        # LIRA: react to a NEW joystick press only. The press that discarded the
+        # previous trajectory may still be held when we get here.
+        prev_rj = bool(buttons.get('RJ'))
         while not buttons[start_key]:
             buttons = self.get_vr_buttons()
             rospy.sleep(0.01)
             if 'B' in buttons and buttons['B']:
                 self.move_to_neutral()
+                self._move_to_control_start()
                 print("moved to neutral. waiting for {} button press to start recording.".format(start_key))
+            rj = bool(buttons.get('RJ'))
+            if rj and not prev_rj and self._confirm_session_end():
+                from widowx_envs.utils.exceptions import SessionEnd
+                self.move_to_neutral()
+                raise SessionEnd()
+            prev_rj = rj
         return self.current_obs()
+
+    # LIRA: slow move to the conf's fixed axes before recording (see control_utils)
+
+    def _move_to_control_start(self):
+        """Move slowly to the conf's fixed axes, so recording does not start with a jump."""
+        from widowx_envs.control_utils import fixed_start_pose, start_move_duration
+        current = self._controller.get_cartesian_pose(matrix=True)
+        target = fixed_start_pose(current, self._hp.control, self._controller.default_rot)
+        if target is None:
+            return
+        duration = start_move_duration(current, target)
+        fixed = ', '.join('{}={}'.format(a, v) for a, v in self._hp.control.items()
+                          if a != 'gripper' and v not in ('teleop', 'hold'))
+        print('moving slowly to the start pose from the conf ({}) over {:.1f}s...'.format(fixed, duration))
+        try:
+            self._controller.move_to_eep(target, duration=duration)
+        except Environment_Exception:
+            print('The arm cannot reach the fixed values in the conf ({}): no IK solution. '
+                  'Change them, or use "hold" instead of a number.'.format(fixed))
+            raise
+        rospy.sleep(0.2)
+        self._reset_previous_qpos()
+
+    def _confirm_session_end(self):
+        """LIRA: A ends the session, grip goes back to collecting."""
+        print('End the session? Press A to end it, or the grip button to keep collecting.')
+        buttons = self.get_vr_buttons()
+        prev_a = bool(buttons.get('A'))  # A may still be held from saving
+        while True:
+            buttons = self.get_vr_buttons()
+            rospy.sleep(0.01)
+            a = bool(buttons.get('A'))
+            if a and not prev_a:
+                print('Ending the session.')
+                return True
+            prev_a = a
+            if buttons.get('handle'):
+                print('Continuing. Press the grip button again to start recording.')
+                # wait for the grip to be released, so it does not start a trajectory by itself
+                while self.get_vr_buttons().get('handle'):
+                    rospy.sleep(0.01)
+                return False
 
     def ask_confirmation(self):
         print('current endeffector pos', self.get_full_state()[:3])

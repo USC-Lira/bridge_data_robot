@@ -326,6 +326,70 @@ def conf_cameras(ctx: Context) -> List[CheckResult]:
     return results
 
 
+@check("host.conf_settings", scope="host")
+def conf_settings(ctx: Context) -> List[CheckResult]:
+    """The --conf file's action_mode / control, cameras and metadata are valid and agree."""
+    name = "host.conf_settings"
+    conf_path = ctx.cache.get("conf_file")
+    if not conf_path:
+        return [_skip(name, "no --conf given")]
+    conf = os.path.basename(conf_path)
+    from widowx_envs.preflight.config import read_make_config
+    from widowx_envs.simple_conf import check_settings, describe_control
+
+    try:
+        mc = read_make_config(conf_path)
+    except (OSError, ValueError) as exc:
+        return [_fail(name, f"could not read {conf}: {exc}")]
+    if mc is None:
+        return [_warn(
+            name,
+            f"{conf} is an old-style conf (no make_config): action_mode, control and metadata are not checked",
+            remedy="Rewrite it with widowx_envs.simple_conf.make_config; see conf_jesse.py for the short form.",
+        )]
+
+    results: List[CheckResult] = []
+    not_literal = mc.pop("_not_literal", [])
+    if not_literal:
+        results.append(_warn(
+            f"{name}.not_checked",
+            f"not plain values, so not checked here: {', '.join(not_literal)}",
+            remedy="Write them out literally in the make_config(...) call so preflight can check them.\n"
+            "make_config still checks them when collection starts.",
+        ))
+        # Stand-ins so the remaining arguments are still checked.
+        stand_in = {"cameras": ["D435"], "action_mode": "3trans3rot",
+                    "metadata": {"task": "?", "operator": "?"}}
+        for key in not_literal:
+            if key in stand_in:
+                mc[key] = stand_in[key]
+            if key in ("action_mode", "control"):
+                mc.pop("control", None)
+                mc["action_mode"] = "3trans3rot"
+
+    control, errors, warnings = check_settings(**mc)
+    if errors:
+        results.append(_fail(
+            name,
+            f"{conf} has {len(errors)} problem(s) in make_config(...)",
+            remedy="\n".join(f"- {e}" for e in errors),
+            errors=errors,
+        ))
+        return results
+    for w in warnings:
+        results.append(_warn(f"{name}.control", w))
+
+    follows = [a for a in control if control[a] == "teleop"]
+    locked = describe_control(control)
+    summary = f"action_mode={mc.get('action_mode')}; follows the hand: {', '.join(follows) or 'nothing'}"
+    if locked:
+        summary += "; " + "; ".join(l.split(" (")[0] for l in locked)
+    md = mc.get("metadata") or {}
+    results.append(_ok(name, summary, control=control))
+    results.append(_ok(f"{name}.metadata", f"task: {md.get('task')!r}, operator: {md.get('operator')!r}"))
+    return results
+
+
 @check("host.v4l2_devices", scope="host")
 def v4l2_devices(ctx: Context) -> List[CheckResult]:
     """Every camera the session needs is connected (v4l2 for webcams, USB for the RealSense)."""

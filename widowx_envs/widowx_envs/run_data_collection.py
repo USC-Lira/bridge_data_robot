@@ -2,6 +2,7 @@ import argparse
 import importlib.util  # replaced: import imp due to deprecation
 
 import json
+import sys
 from widowx_envs.utils.utils import ask_confirm, save_config
 import datetime
 import os
@@ -41,7 +42,9 @@ class DataCollectionManager(object):
 
     def run(self):
         hyperparams = self.hyperparams
-        assert 'collection_metadata' in hyperparams
+        # LIRA: configs from simple_conf.make_config carry the metadata inline;
+        # older conf files point at a json file.
+        assert 'collection_metadata' in hyperparams or 'metadata' in hyperparams
 
         self.set_paths(hyperparams)
         save_config(hyperparams, hyperparams['data_save_dir'])
@@ -49,7 +52,10 @@ class DataCollectionManager(object):
         s = TrajectoryCollector(hyperparams)
 
         metadata_destination = hyperparams['data_save_dir']
-        meta_data_dict = json.load(open(hyperparams['collection_metadata'], 'r'))
+        meta_data_dict = {}
+        if hyperparams.get('collection_metadata'):
+            meta_data_dict = json.load(open(hyperparams['collection_metadata'], 'r'))
+        meta_data_dict.update(hyperparams.get('metadata') or {})
         meta_data_dict['date_time'] = datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
 
         if hyperparams['record_floor_height']:
@@ -92,3 +98,16 @@ class DataCollectionManager(object):
 
 if __name__ == '__main__':
     DataCollectionManager().run()
+    # LIRA: collection is over (ended from the headset, or num_trajectories
+    # reached) and every trajectory is already written: saving is synchronous.
+    # Background threads (the VR reader's adb stream, ROS) can still keep the
+    # process alive, so exit explicitly instead of waiting on them.
+    print('Data collection finished.')
+    try:
+        import rospy
+        rospy.signal_shutdown('data collection finished')
+    except Exception:
+        pass
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

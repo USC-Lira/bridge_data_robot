@@ -230,6 +230,42 @@ def default_config() -> PreflightConfig:
 CONF_TOPIC_KEYS = ("camera_topics", "depth_camera_topics")
 
 
+def read_make_config(path: str) -> Optional[dict]:
+    """The literal arguments of a ``make_config(...)`` call in a conf file.
+
+    Returns None if the file does not use make_config (an old-style conf).
+    Arguments that are not plain literals (e.g. built from variables) are
+    listed under ``"_not_literal"`` instead, so checks can say they skipped
+    them. Raises ValueError if the file cannot be parsed.
+    """
+    with open(path) as f:
+        source = f.read()
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError as exc:
+        raise ValueError(f"syntax error at line {exc.lineno}: {exc.msg}") from exc
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name != "make_config":
+            continue
+        kwargs: dict = {"_not_literal": []}
+        for kw in node.keywords:
+            if kw.arg is None:
+                kwargs["_not_literal"].append("**...")
+                continue
+            try:
+                kwargs[kw.arg] = ast.literal_eval(kw.value)
+            except ValueError:
+                kwargs["_not_literal"].append(kw.arg)
+        if node.args:
+            kwargs["_not_literal"].append("positional arguments")
+        return kwargs
+    return None
+
+
 def read_conf_topics(path: str) -> Dict[str, List[str]]:
     """The topics a ``conf_*.py`` records, read without executing it.
 
@@ -245,6 +281,12 @@ def read_conf_topics(path: str) -> Dict[str, List[str]]:
         tree = ast.parse(source, filename=path)
     except SyntaxError as exc:
         raise ValueError(f"syntax error at line {exc.lineno}: {exc.msg}") from exc
+
+    # Short-form confs: make_config(cameras=[...], depth=...).
+    mc = read_make_config(path)
+    if mc is not None and isinstance(mc.get("cameras"), list):
+        from widowx_envs.simple_conf import topics_for
+        return topics_for(mc["cameras"], bool(mc.get("depth", False)))
 
     found: Dict[str, List[str]] = {}
     for node in ast.walk(tree):
