@@ -12,8 +12,8 @@ config = make_config(
     depth=False,                  # also record RealSense depth
     action_mode="3trans3rot",    # 3trans3rot, 3trans1rot, 3trans, or custom (+ control={...})
     metadata={
-        "task": "",              # what the operator is asked to do, e.g. "put the cup in the bowl"
-        "operator": "",          # who is collecting
+        "task": "test",              # what the operator is asked to do, e.g. "put the cup in the bowl"
+        "operator": "Hugo",          # who is collecting
     },
     neutral_before_each=True,    # arm returns to neutral before every trajectory
     # num_trajectories=50,       # optional: stop after this many (default: until you end it from the headset)
