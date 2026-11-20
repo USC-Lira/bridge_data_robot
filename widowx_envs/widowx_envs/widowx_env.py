@@ -226,7 +226,6 @@ class VR_WidowX(WidowXEnv):
                 self.move_to_neutral()
                 raise SessionEnd()
             prev_rj = rj
-        self._mark_recording_started()
         return self.current_obs()
 
     # LIRA: slow move to the conf's fixed axes before recording (see control_utils)
@@ -250,17 +249,6 @@ class VR_WidowX(WidowXEnv):
             raise
         rospy.sleep(0.2)
         self._reset_previous_qpos()
-
-    # LIRA: tells the camera viewer that this session has started recording,
-    # so it stops offering camera swaps (they would mix cameras up mid-dataset).
-    RECORDING_MARKER = '/tmp/widowx_collection_recording'
-
-    def _mark_recording_started(self):
-        try:
-            with open(self.RECORDING_MARKER, 'w') as f:
-                f.write(str(os.getpid()))
-        except OSError:
-            pass
 
     def _confirm_session_end(self):
         """LIRA: A ends the session, grip goes back to collecting."""
