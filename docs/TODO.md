@@ -108,3 +108,25 @@ the container check fail while they are empty. Each session folder also gets
       the headset asks for "Allow" again. Preflight starts it on the host first,
       which avoids this in the normal flow; mounting the host's `~/.android`
       into the container in `docker-compose.yml` would rule it out.
+
+## Teleoperation without the VR headset (to discuss)
+
+Collection needs the Quest today: `VR_WidowX` reads raw headset buttons and
+`VRTeleopPolicy` follows the controller pose. Proposed design, not started:
+
+- [ ] An input-device layer between the operator and the env. Every device
+      provides the session events (start trajectory, end trajectory, save,
+      discard, go to neutral, end session); the env waits for events instead
+      of specific buttons. VR maps them to today's buttons.
+- [ ] Two motion styles feeding the same pipeline: VR = absolute pose with a
+      clutch (as today); keyboard / SpaceMouse = rate control (fixed speed
+      while held, capped, e.g. 3 cm/s and 15 deg/s). Both produce a target
+      pose that goes through the same `apply_control`, so datasets keep the
+      same 7-number actions; metadata records the device.
+- [ ] `make_config(teleop="vr" | "keyboard" | "spacemouse")`, a controls card
+      per device, preflight checks per device.
+- [ ] Order: (1) refactor with VR only, no behaviour change, tested on the rig;
+      (2) keyboard (keys from the collection terminal, layout as in
+      `teleop.py`); (3) SpaceMouse if the lab has one.
+- [ ] Open questions: SpaceMouse or keyboard only; keys from the terminal OK;
+      gripper as toggle or in steps.

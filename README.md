@@ -59,6 +59,8 @@ Use `--scope host` before the container is up, and `--list` to see all checks. S
 
 ## Data collection
 
+To watch the cameras live (also during collection): `python3 view_cameras.py` opens a page in your browser with every camera topic, its resolution and frame rate (depth in false colour). It needs the `robonet` container running; `Ctrl+C` stops it.
+
 The quickest way: `python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py --preflight` runs preflight, starts the container if needed, asks you to confirm the headset is ready, and starts collection. Without `--preflight` it skips the checks and collects straight away, which needs the container to be running already (e.g. from an earlier preflight). `python3 stop_container.py` stops the container afterwards. The manual steps follow.
 
 First, make sure the `robonet-base` container is running using the above command. Then, run the following commands:

@@ -113,6 +113,16 @@ window only closes the view; the container keeps running. To get the log back:
 
 > 📷 *Attach: screenshot of healthy roslaunch output.*
 
+To watch all cameras live in your browser (also while collecting):
+
+```bash
+python3 view_cameras.py            # opens http://localhost:8080; Ctrl+C stops it
+```
+
+Each camera shows its resolution and frame rate; depth is in false colour.
+USB webcams take a few seconds to appear (they start when someone watches).
+`--lan` lets other machines on the network open the page.
+
 To sanity-check the sensors by hand:
 
 ```bash
