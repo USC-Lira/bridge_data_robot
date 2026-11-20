@@ -163,7 +163,7 @@ class VR_WidowX(WidowXEnv):
         # LIRA: the operator's input device (see teleop_devices.py). The session
         # steps below use its named events instead of specific VR buttons.
         from widowx_envs.teleop_devices import make_device
-        self.device = make_device(self._hp.teleop)
+        self.device = make_device(self._hp.teleop, self._hp.teleop_profile)
         # Kept for code that reads the headset directly (intervention, DAgger).
         self.oculus_reader = getattr(self.device, 'reader', None)
 
@@ -175,8 +175,10 @@ class VR_WidowX(WidowXEnv):
         default_dict = {
             'num_task_stages': 1,
             'make_oculus_reader': True,
-            # LIRA: input device, see teleop_devices.DEVICES
+            # LIRA: input device, see teleop_devices.DEVICES, and for the
+            # keyboard an optional controls profile (teleop_profiles.py)
             'teleop': 'vr',
+            'teleop_profile': None,
             # LIRA: per-axis control from simple_conf.make_config (also given to
             # the teleop policy). Used here to move slowly to the fixed values
             # before recording, instead of jumping there on the first step.

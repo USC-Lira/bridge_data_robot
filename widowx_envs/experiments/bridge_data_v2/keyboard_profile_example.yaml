@@ -1,0 +1,22 @@
+# Keyboard controls profile: only what differs from the default layout
+# (widowx_envs/widowx_envs/teleop_profiles.py, DEFAULT_PROFILE).
+# Use it from a conf with teleop_profile="keyboard_profile_example.yaml".
+#
+# Keys: one character, or space, enter, esc, backspace, tab, up, down, left, right.
+# Actions: x+ x- y+ y- z+ z- roll+ roll- pitch+ pitch- yaw+ yaw-,
+#   gripper_toggle gripper_close gripper_open faster slower,
+#   start end_trajectory neutral end_session save discard confirm cancel.
+# A key may be reused across phases (e.g. Enter for start and end_trajectory),
+# not within one; preflight checks this.
+bindings:
+  x+: up             # arrow keys for the horizontal plane
+  x-: down
+  y+: left
+  y-: right
+  z+: w
+  z-: s
+linear_speed_m_s: 0.02          # max 0.10
+angular_speed_deg_s: 15         # max 60
+speed_levels: [0.5, 1.0, 2.0]   # what +/- step through
+start_speed_level: 1            # index into speed_levels
+gripper_step: 0.1               # how much [ and ] move the gripper
