@@ -24,6 +24,9 @@ from widowx_envs.preflight.core import CheckResult, Context, Status, check
 
 # How long to wait for a single message before declaring a topic dead.
 MESSAGE_TIMEOUT_S = 5.0
+# USB webcams (video_stream_opencv) open the camera only when the first
+# subscriber connects, and a Logitech takes several seconds to start streaming.
+WEBCAM_FIRST_FRAME_TIMEOUT_S = 20.0
 
 
 def _ok(name, summary, **details) -> CheckResult:
@@ -257,19 +260,24 @@ def _check_camera_stream(ctx, cam, name) -> CheckResult:
     rospy = _rospy(ctx)
     from sensor_msgs.msg import Image
 
+    import time
+    first_timeout = WEBCAM_FIRST_FRAME_TIMEOUT_S if cam.kind == "usb" else MESSAGE_TIMEOUT_S
+    started = time.time()
     try:
-        first = rospy.wait_for_message(cam.image_topic, Image, timeout=MESSAGE_TIMEOUT_S)
+        first = rospy.wait_for_message(cam.image_topic, Image, timeout=first_timeout)
     except Exception:
         return _fail(
             name,
-            f"{cam.image_topic} is advertised but silent for {MESSAGE_TIMEOUT_S:.0f}s",
-            remedy="The driver is advertising but not capturing. Unplug/replug the camera\n"
-            "and restart the container.",
+            f"{cam.image_topic} is advertised but silent for {first_timeout:.0f}s",
+            remedy="The driver is advertising but not capturing. Look at the container output\n"
+            "for errors about this camera; unplug/replug it and restart the container.",
         )
+    startup_s = time.time() - started
 
     details = {
         "resolution": f"{first.width}x{first.height}",
         "encoding": first.encoding,
+        "first_frame_after_s": round(startup_s, 1),
     }
 
     if (first.width, first.height) != (cam.width, cam.height):
@@ -299,7 +307,8 @@ def _check_camera_stream(ctx, cam, name) -> CheckResult:
                 **details,
             )
 
-    return _ok(name, f"{details['resolution']} {first.encoding}", **details)
+    slow = f", first frame after {startup_s:.0f}s (camera starts when someone subscribes)" if startup_s > 2 else ""
+    return _ok(name, f"{details['resolution']} {first.encoding}{slow}", **details)
 
 
 @check("container.collection_config", scope="container", requires=["container.ros_master"])

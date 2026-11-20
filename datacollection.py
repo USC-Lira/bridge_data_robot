@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""Run preflight, then start a data collection session.
+"""Start a data collection session.
 
     python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+    python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py --preflight
 
-1. Runs preflight with that conf. Preflight checks the rig, fixes what it can,
-   and starts the robonet container if it is not running.
-2. If preflight ends without a FAIL (warnings are fine), asks whether to start
-   collecting.
-3. Asks you to confirm the RAIL Oculus Teleoperation app is open in the
+By default it expects the robonet container to be running already (started by
+an earlier preflight run) and goes straight to collecting:
+
+1. Asks whether to start collecting.
+2. Asks you to confirm the RAIL Oculus Teleoperation app is open in the
    headset and that the headset is facing you.
-4. Starts run_data_collection.py with the same conf inside the container.
+3. Starts run_data_collection.py with that conf inside the container.
+
+With --preflight it first runs preflight with the same conf, which checks the
+rig, fixes what it can and starts the container if needed; collection only
+starts if preflight ends without a FAIL (warnings are fine). Preflight options
+are passed through after --preflight, e.g. --build, --no-generate, -v.
 
 End the session from the headset (right joystick, then A); the script then
 offers to stop the container (stop_container.py). Ctrl+C also stops collection.
-
-Any preflight option can be passed through, e.g. --build, --no-generate,
---config my_rig.yaml, -v.
 """
 
 import argparse
@@ -147,6 +150,9 @@ def main() -> int:
     p.add_argument("conf", help="experiment config, e.g. widowx_envs/experiments/bridge_data_v2/conf_jesse.py")
     p.add_argument("--config", help="preflight config (.yaml/.json), if your rig differs from the defaults")
     p.add_argument("--controls", action="store_true", help="only print the VR controls and exit")
+    p.add_argument("--preflight", action="store_true",
+                   help="run preflight first (checks the rig, starts the container if needed); "
+                   "other preflight options such as --build or -v are passed through")
     p.add_argument("-y", "--yes", action="store_true",
                    help="do not ask whether to start collecting (the headset confirmation is still asked)")
     if "--controls" in sys.argv[1:]:
@@ -162,13 +168,28 @@ def main() -> int:
         print("datacollection.py needs a terminal: collection is interactive.")
         return 2
 
-    pf_args = ["--conf", args.conf] + (["--config", args.config] if args.config else []) + passthrough
-    rc = preflight.main(pf_args)
-    if rc != 0:
-        print("\nPreflight found failures, so collection was not started. Fix them and run this again.")
-        return rc
+    config = PreflightConfig.load(args.config)
+    if args.preflight:
+        pf_args = ["--conf", args.conf] + (["--config", args.config] if args.config else []) + passthrough
+        rc = preflight.main(pf_args)
+        if rc != 0:
+            print("\nPreflight found failures, so collection was not started. Fix them and run this again.")
+            return rc
+        question = "\nPreflight passed. Start collecting data now?"
+    else:
+        if passthrough:
+            print(f"Unknown option(s) {' '.join(passthrough)}. Preflight options only apply with --preflight.")
+            return 2
+        if not session.container_running(REPO_ROOT, config):
+            print(f"The {config.compose_service} container is not running. Start it by running preflight\n"
+                  "first, either on its own or as part of this script:\n"
+                  f"  python3 datacollection.py {args.conf} --preflight")
+            return 2
+        print(f"The {config.compose_service} container is running (preflight not run; "
+              "add --preflight to check the rig first).")
+        question = "\nStart collecting data now?"
 
-    if not args.yes and not ask("\nPreflight passed. Start collecting data now?"):
+    if not args.yes and not ask(question):
         print("Not started. The container keeps running; run this again when ready,\n"
               "or stop it with: python3 stop_container.py")
         return 0
@@ -176,7 +197,6 @@ def main() -> int:
         print("Not started. Run this again when the headset is ready.")
         return 0
 
-    config = PreflightConfig.load(args.config)
     cmd = collection_command(args.conf, config)
     window = open_controls_window(args.conf)
     if window:
