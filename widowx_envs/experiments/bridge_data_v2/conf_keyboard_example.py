@@ -12,7 +12,7 @@ config = make_config(
     cameras=["blue", "yellow"],
     action_mode="3trans1rot",            # position + yaw is easiest to drive from a keyboard
     teleop="keyboard",
-    # teleop_profile="keyboard_profile_example.yaml",   # optional: your own keys / speeds
+    teleop_profile="keyboard_profile_example.yaml",   # optional: your own keys / speeds
     metadata={
         "task": "",                      # fill in
         "operator": "",                  # fill in
