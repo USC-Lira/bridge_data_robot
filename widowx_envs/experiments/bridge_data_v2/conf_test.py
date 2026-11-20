@@ -9,7 +9,7 @@ from widowx_envs.simple_conf import make_config
 
 config = make_config(
     cameras=["blue", "yellow"],            # D435 (the RealSense), blue, yellow, wrist
-    depth=True,                  # also record RealSense depth
+    depth=False,                  # also record RealSense depth
     action_mode="3trans3rot",    # 3trans3rot, 3trans1rot, 3trans, or custom (+ control={...})
     metadata={
         "task": "",              # what the operator is asked to do, e.g. "put the cup in the bowl"
