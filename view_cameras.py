@@ -6,10 +6,13 @@
     python3 view_cameras.py --topics /blue/image_raw /yellow/image_raw
     python3 view_cameras.py --lan               # also viewable from other machines on the network
     python3 view_cameras.py --no-browser        # just print the address
+    python3 view_cameras.py --during-collection # allow it while data collection runs
 
 Starts widowx_envs/widowx_envs/camera_viewer.py inside the running robonet
-container (the cameras are ROS topics there) and opens the page. It works
-during data collection too. Ctrl+C stops it.
+container (the cameras are ROS topics there) and opens the page. Ctrl+C
+stops it. It does not run during data collection unless --during-collection
+is given. If blue and yellow are in each other's place, the page has a button
+to swap them (not during collection).
 
 USB webcams start streaming only when someone watches them, so they can take
 a few seconds to appear.
@@ -51,6 +54,8 @@ def main() -> int:
     p.add_argument("--topics", nargs="+", help="only these image topics (default: all)")
     p.add_argument("--lan", action="store_true", help="let other machines on the network view it too")
     p.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    p.add_argument("--during-collection", action="store_true",
+                   help="allow it while data collection runs (swapping cameras stays disabled)")
     p.add_argument("--config", help="preflight config (.yaml/.json), if your rig differs from the defaults")
     args = p.parse_args()
 
@@ -65,6 +70,8 @@ def main() -> int:
         viewer_args += ["--topics", *args.topics]
     if args.lan:
         viewer_args.append("--lan")
+    if args.during_collection:
+        viewer_args.append("--during-collection")
     inner = "python " + " ".join([CONTAINER_SCRIPT, *viewer_args])
     # With a terminal attached, Ctrl+C reaches the viewer inside the container.
     tty = [] if (sys.stdin.isatty() and sys.stdout.isatty()) else ["-T"]
@@ -75,7 +82,8 @@ def main() -> int:
         threading.Thread(target=open_when_ready, args=(url,), daemon=True).start()
     print(f"Starting the camera viewer at {url} (Ctrl+C to stop)...", flush=True)
     try:
-        return subprocess.run(cmd, cwd=REPO_ROOT, env=session.compose_env(REPO_ROOT, config)).returncode
+        rc = subprocess.run(cmd, cwd=REPO_ROOT, env=session.compose_env(REPO_ROOT, config)).returncode
+        return 0 if rc in (0, 130) else rc
     except KeyboardInterrupt:
         return 0
 

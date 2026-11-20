@@ -8,14 +8,29 @@ Runs inside the robonet container (it needs ROS). Start it from the host with
     python3 camera_viewer.py --port 8090
     python3 camera_viewer.py --topics /blue/image_raw /D435/color/image_raw
     python3 camera_viewer.py --lan           # also reachable from other machines
+    python3 camera_viewer.py --during-collection
 
 Every sensor_msgs/Image topic is shown in a grid with its resolution and
 measured frame rate. Depth images are shown in false colour. Topics that
 appear later (e.g. a camera started after the viewer) are picked up
 automatically.
+
+It does not run during data collection unless --during-collection is given:
+it refuses to start while run_data_collection.py runs, and closes itself if
+collection starts.
+
+Swapping cameras: if two webcams of the same model (blue and yellow) are in
+each other's place, the page offers a swap button. It swaps their entries in
+the usb connector chart and restarts only the webcam streams (the arm driver
+keeps running). Preflight keeps that assignment while the cameras stay on the
+same USB ports. Swapping is never offered during data collection, and only
+from the Alienware itself (not with --lan from another machine).
 """
 
 import argparse
+import json
+import os
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,9 +41,122 @@ import rospy
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 
+CHART_PATH = "/tmp/camera_connector_chart"   # usb_connector_chart.yml, mounted by docker-compose.yml
+RESTART_LOG = "/tmp/camera_streams_restart.log"
 STREAM_FPS = 15        # rate at which the page is updated, per camera
 JPEG_QUALITY = 80
 DISCOVERY_PERIOD_S = 3.0
+
+
+# --------------------------------------------------------------------------- #
+# data collection guard
+# --------------------------------------------------------------------------- #
+
+
+def collection_running() -> bool:
+    """Whether run_data_collection.py runs in this container."""
+    me = os.getpid()
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == me:
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                if b"run_data_collection.py" in f.read():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# camera assignment (usb connector chart)
+# --------------------------------------------------------------------------- #
+
+
+def read_chart():
+    chart = {}
+    try:
+        with open(CHART_PATH) as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].strip()
+                if ":" in line and not line.startswith("{"):
+                    key, _, value = line.partition(":")
+                    chart[key.strip()] = value.strip().strip("'\"")
+    except OSError:
+        pass
+    return chart
+
+
+def write_chart(chart):
+    # Write in place: the chart is a single bind-mounted file, a rename would
+    # not reach the host.
+    with open(CHART_PATH, "w") as f:
+        f.write("".join(f"{k}: '{v}'\n" for k, v in chart.items()) if chart else "{}\n")
+
+
+def camera_models(chart):
+    """{chart key: v4l2 model name}, e.g. {'blue': '1080P Pro Stream'}."""
+    try:
+        out = subprocess.run(["v4l2-ctl", "--list-devices"], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    headers = [l.strip() for l in out.splitlines() if l.strip() and not l[0].isspace()]
+    models = {}
+    for key, usb_path in chart.items():
+        for h in headers:
+            if usb_path and usb_path in h:
+                models[key] = h.split(" (")[0]
+    return models
+
+
+def swappable_pairs(chart):
+    """Pairs of chart keys whose cameras are the same model (only those can be mixed up)."""
+    models = camera_models(chart)
+    keys = [k for k in chart if k in models]
+    return [(a, b) for i, a in enumerate(keys) for b in keys[i + 1:] if models[a] == models[b]]
+
+
+def restart_webcam_streams(chart_keys):
+    """Restart multicam_server's webcam streams with the current chart.
+
+    Only the camera streamer and the stream nodes under each camera's
+    namespace are stopped; the arm driver and the RealSense keep running.
+    start_streamers.py hard-kills its roslaunch children, so the stream nodes
+    themselves are stopped too, or they would keep /dev/video* busy.
+    """
+    import rosnode
+
+    nodes = rosnode.get_node_names()
+    targets = [n for n in nodes if n.rstrip("/").endswith("/camera_stream")]
+    targets += [n for n in nodes
+                if any(n.startswith(f"/{k}/") for k in chart_keys) or "/streamer_" in n]
+    if targets:
+        rosnode.kill_nodes(targets)
+    time.sleep(3)  # let the devices be released
+    with open(RESTART_LOG, "w") as log:
+        subprocess.Popen(
+            ["roslaunch", "multicam_server", "cameras.launch", f"camera_connector_chart:={CHART_PATH}"],
+            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
+        )
+    return targets
+
+
+def swap_cameras(a, b):
+    """Swap two chart entries and restart the webcam streams. Returns a message."""
+    if collection_running():
+        raise ValueError("data collection is running: swapping cameras now would mix them up in the dataset")
+    chart = read_chart()
+    if a not in chart or b not in chart:
+        raise ValueError(f"{a} and {b} must both be in the usb connector chart")
+    if (a, b) not in swappable_pairs(chart) and (b, a) not in swappable_pairs(chart):
+        raise ValueError(f"{a} and {b} are not the same camera model, so they cannot be mixed up")
+    chart[a], chart[b] = chart[b], chart[a]
+    write_chart(chart)
+    rospy.loginfo("camera viewer: swapped %s and %s in the chart: %s", a, b, chart)
+    restart_webcam_streams(list(chart))
+    return (f"Swapped {a} and {b}. The webcam streams are restarting; they take about 10 s to come "
+            "back. Preflight keeps this assignment while the cameras stay on the same USB ports.")
 
 
 class CameraFeed:
@@ -120,12 +248,24 @@ PAGE = """<!doctype html>
   figcaption {{ padding: 6px 8px; font-family: ui-monospace, monospace; font-size: 12px; }}
   .info {{ color: #8a8; float: right; }}
   .empty {{ color: #aaa; }}
+  .panel {{ margin: 0 0 12px; padding: 8px 10px; border: 1px solid #333; background: #1a1a1a; }}
+  .panel code {{ color: #ccc; }}
+  button {{ margin: 4px 8px 0 0; padding: 6px 10px; background: #2b4a6b; color: #fff; border: 0; cursor: pointer; }}
+  button:disabled {{ background: #444; color: #999; cursor: not-allowed; }}
+  .note {{ color: #999; font-size: 12px; }}
 </style></head>
 <body>
 <h1>WidowX cameras</h1>
+{assignment}
 <div class="grid">{figures}</div>
 {empty}
 <script>
+  async function swap(a, b) {{
+    if (!confirm("Swap " + a + " and " + b + "? The webcam streams restart (about 10 s); the arm keeps running.")) return;
+    const r = await fetch("/swap?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b), {{method: "POST"}});
+    alert(await r.text());
+    setTimeout(() => location.reload(), 8000);
+  }}
   // Refresh the per-camera info line; reload when new topics appear.
   const known = {topics_json};
   setInterval(async () => {{
@@ -142,7 +282,6 @@ PAGE = """<!doctype html>
 
 
 def make_handler(viewer):
-    import json
     from urllib.parse import quote, unquote
 
     class Handler(BaseHTTPRequestHandler):
@@ -175,8 +314,46 @@ def make_handler(viewer):
                 for t in topics
             )
             empty = "" if topics else '<p class="empty">No image topics yet. Is the robonet container running?</p>'
-            html = PAGE.format(figures=figures, empty=empty, topics_json=json.dumps(topics))
+            html = PAGE.format(figures=figures, empty=empty, topics_json=json.dumps(topics),
+                               assignment=self._assignment_html())
             self._send(200, "text/html; charset=utf-8", html.encode())
+
+        def _local(self):
+            return self.client_address[0] in ("127.0.0.1", "::1")
+
+        def _assignment_html(self):
+            chart = read_chart()
+            if not chart:
+                return ""
+            rows = ", ".join(f"<code>/{k}</code> = {v}" for k, v in chart.items())
+            pairs = swappable_pairs(chart)
+            if not pairs:
+                return f'<div class="panel">Webcams: {rows}</div>'
+            reason = ""
+            if collection_running():
+                reason = "Swapping is disabled while data collection runs."
+            elif not self._local():
+                reason = "Swapping is only possible on the Alienware itself."
+            buttons = "".join(
+                f'<button {"disabled" if reason else ""} onclick="swap(\'{a}\', \'{b}\')">Swap {a} and {b}</button>'
+                for a, b in pairs
+            )
+            note = reason or "Use this if two cameras of the same model are in each other's place."
+            return f'<div class="panel">Webcams: {rows}<br>{buttons}<div class="note">{note}</div></div>'
+
+        def do_POST(self):
+            from urllib.parse import parse_qs, urlparse
+            url = urlparse(self.path)
+            if url.path != "/swap":
+                return self._send(404, "text/plain", b"not found")
+            if not self._local():
+                return self._send(403, "text/plain", b"Swapping is only possible on the Alienware itself.")
+            q = parse_qs(url.query)
+            try:
+                msg = swap_cameras(q.get("a", [""])[0], q.get("b", [""])[0])
+                self._send(200, "text/plain; charset=utf-8", msg.encode())
+            except Exception as exc:
+                self._send(409, "text/plain; charset=utf-8", f"Not swapped: {exc}".encode())
 
         def _stream(self, topic):
             feed = viewer.feed(topic)
@@ -207,7 +384,15 @@ def main():
     p.add_argument("--topics", nargs="+", help="only these image topics (default: all)")
     p.add_argument("--lan", action="store_true",
                    help="listen on all interfaces, so other machines on the network can view it")
+    p.add_argument("--during-collection", action="store_true",
+                   help="allow running while data collection runs (otherwise it refuses to start, "
+                   "and closes itself when collection starts)")
     args = p.parse_args()
+
+    if collection_running() and not args.during_collection:
+        print("Data collection is running. The camera viewer does not run during collection unless\n"
+              "you ask for it: add --during-collection.", flush=True)
+        raise SystemExit(3)
 
     rospy.init_node("camera_viewer", anonymous=True, disable_signals=True)
     viewer = Viewer(args.topics)
@@ -217,6 +402,18 @@ def main():
     server = ThreadingHTTPServer((host, args.port), make_handler(viewer))
     server.daemon_threads = True
     print(f"Camera viewer at http://localhost:{args.port}  (Ctrl+C to stop)", flush=True)
+
+    if not args.during_collection:
+        def close_when_collection_starts():
+            while True:
+                time.sleep(2)
+                if collection_running():
+                    print("Data collection started: closing the camera viewer "
+                          "(use --during-collection to keep it open).", flush=True)
+                    server.shutdown()
+                    return
+        threading.Thread(target=close_when_collection_starts, daemon=True).start()
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

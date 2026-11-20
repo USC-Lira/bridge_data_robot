@@ -525,6 +525,46 @@ def _check_usb_camera(row: str, cam, usb: List[Dict[str, str]]) -> CheckResult:
     return _ok(row, f"{where}, {d['speed']} Mb/s [realsense2_camera]")
 
 
+def format_chart(chart: Dict[str, str]) -> str:
+    """usb_connector_chart.yml text, as generate_usb_config.sh writes it."""
+    if not chart:
+        return "{}\n"
+    return "".join(f"{k}: '{v}'\n" for k, v in chart.items())
+
+
+def _interchangeable_groups(ctx: Context) -> List[List[str]]:
+    """Chart keys of USB cameras that share a v4l2 name (e.g. blue and yellow).
+
+    generate_usb_config.sh can only tell them apart by enumeration order.
+    """
+    by_name: Dict[str, List[str]] = {}
+    for cam in ctx.config.catalog:
+        if cam.kind == "usb" and cam.v4l2_name:
+            by_name.setdefault(cam.v4l2_name, []).append(cam.chart_key or cam.name)
+    return [keys for keys in by_name.values() if len(keys) > 1]
+
+
+def _keep_assignment(ctx: Context, old: Dict[str, str], new: Dict[str, str]) -> List[str]:
+    """Keep the current assignment of interchangeable cameras on unchanged ports.
+
+    If blue and yellow are still on the same two USB ports, the script's
+    order-based choice must not undo an assignment someone made on purpose
+    (e.g. a swap from the camera viewer). Edits ``new`` in place and returns
+    the groups it kept.
+    """
+    kept = []
+    for group in _interchangeable_groups(ctx):
+        in_new = [k for k in group if k in new]
+        in_old = [k for k in group if k in old]
+        if (sorted(in_new) == sorted(in_old) and len(in_new) > 1
+                and {new[k] for k in in_new} == {old[k] for k in in_old}
+                and any(new[k] != old[k] for k in in_new)):
+            for k in in_new:
+                new[k] = old[k]
+            kept.append("/".join(in_new))
+    return kept
+
+
 def _regenerate_chart(ctx: Context, path: str) -> List[CheckResult]:
     """Re-run generate_usb_config.sh and replace the chart if the result differs.
 
@@ -565,9 +605,15 @@ def _regenerate_chart(ctx: Context, path: str) -> List[CheckResult]:
             with open(path) as f:
                 old = {k: v for k, v in parse_flat_yaml(f.read()).items() if v}
 
+        kept = _keep_assignment(ctx, old, new) if old else []
+        if kept:
+            with open(new_path, "w") as f:
+                f.write(format_chart(new))
+
         listing = ", ".join(f"{k} ({v})" for k, v in new.items()) or "no USB webcams"
         if old == new:
-            return [_ok(name, f"{rel} up to date: {listing}")]
+            note = f" (kept the current {', '.join(kept)} assignment)" if kept else ""
+            return [_ok(name, f"{rel} up to date: {listing}{note}")]
 
         backup = None
         if old is not None:

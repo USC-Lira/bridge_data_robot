@@ -113,15 +113,23 @@ window only closes the view; the container keeps running. To get the log back:
 
 > 📷 *Attach: screenshot of healthy roslaunch output.*
 
-To watch all cameras live in your browser (also while collecting):
+To watch all cameras live in your browser:
 
 ```bash
-python3 view_cameras.py            # opens http://localhost:8080; Ctrl+C stops it
+python3 view_cameras.py                      # opens http://localhost:8080; Ctrl+C stops it
+python3 view_cameras.py --during-collection  # only if you want it while collecting
 ```
 
 Each camera shows its resolution and frame rate; depth is in false colour.
 USB webcams take a few seconds to appear (they start when someone watches).
 `--lan` lets other machines on the network open the page.
+
+**Blue and yellow in each other's place?** The page has a **Swap blue and
+yellow** button: it swaps them in `usb_connector_chart.yml` and restarts only
+the webcam streams (about 10 s; the arm keeps running). Preflight keeps that
+assignment as long as the cameras stay on the same USB ports. The button is
+disabled during data collection and when the page is opened from another
+machine.
 
 To sanity-check the sensors by hand:
 
