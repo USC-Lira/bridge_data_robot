@@ -14,7 +14,7 @@ config = make_config(
     teleop="keyboard",
     teleop_profile="keyboard_profile_example.yaml",   # optional: your own keys / speeds
     metadata={
-        "task": "",                      # fill in
-        "operator": "",                  # fill in
+        "task": "keyboard test",                      # fill in
+        "operator": "Hugo",                  # fill in
     },
 )
