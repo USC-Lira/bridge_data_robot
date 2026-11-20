@@ -20,4 +20,5 @@ class InterventionWidowX(VR_WidowX):
                 self._controller.close_gripper()
                 rospy.sleep(1)
                 print("Object in hand. Waiting for {} button press to start recording.".format(start_key))
+        self._mark_recording_started()  # LIRA: see VR_WidowX
         return self.current_obs()

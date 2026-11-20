@@ -23,8 +23,9 @@ Swapping cameras: if two webcams of the same model (blue and yellow) are in
 each other's place, the page offers a swap button. It swaps their entries in
 the usb connector chart and restarts only the webcam streams (the arm driver
 keeps running). Preflight keeps that assignment while the cameras stay on the
-same USB ports. Swapping is never offered during data collection, and only
-from the Alienware itself (not with --lan from another machine).
+same USB ports. With --during-collection, swapping stays possible until the
+session records its first episode, then it is disabled. Swapping is only
+possible from the Alienware itself (not with --lan from another machine).
 """
 
 import argparse
@@ -43,6 +44,8 @@ from sensor_msgs.msg import Image
 
 CHART_PATH = "/tmp/camera_connector_chart"   # usb_connector_chart.yml, mounted by docker-compose.yml
 RESTART_LOG = "/tmp/camera_streams_restart.log"
+# Written by VR_WidowX (its process id) when a session records its first episode.
+RECORDING_MARKER = "/tmp/widowx_collection_recording"
 STREAM_FPS = 15        # rate at which the page is updated, per camera
 JPEG_QUALITY = 80
 DISCOVERY_PERIOD_S = 3.0
@@ -53,19 +56,45 @@ DISCOVERY_PERIOD_S = 3.0
 # --------------------------------------------------------------------------- #
 
 
-def collection_running() -> bool:
-    """Whether run_data_collection.py runs in this container."""
-    me = os.getpid()
+def collection_pids():
+    """Process ids of run_data_collection.py in this container."""
+    me, pids = os.getpid(), []
     for pid in os.listdir("/proc"):
         if not pid.isdigit() or int(pid) == me:
             continue
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as f:
                 if b"run_data_collection.py" in f.read():
-                    return True
+                    pids.append(int(pid))
         except OSError:
             continue
-    return False
+    return pids
+
+
+def collection_running() -> bool:
+    return bool(collection_pids())
+
+
+def recording_started() -> bool:
+    """Whether the running collection session has started recording episodes.
+
+    The marker holds the process id of the session that wrote it, so a marker
+    left by an earlier session does not count.
+    """
+    try:
+        with open(RECORDING_MARKER) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return False
+    return pid in collection_pids()
+
+
+def swap_blocked_reason():
+    """Why swapping is not allowed right now, or None."""
+    if collection_running() and recording_started():
+        return ("data collection has started recording episodes: swapping cameras now would mix "
+                "them up in the dataset")
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -144,8 +173,9 @@ def restart_webcam_streams(chart_keys):
 
 def swap_cameras(a, b):
     """Swap two chart entries and restart the webcam streams. Returns a message."""
-    if collection_running():
-        raise ValueError("data collection is running: swapping cameras now would mix them up in the dataset")
+    reason = swap_blocked_reason()
+    if reason:
+        raise ValueError(reason)
     chart = read_chart()
     if a not in chart or b not in chart:
         raise ValueError(f"{a} and {b} must both be in the usb connector chart")
@@ -330,15 +360,20 @@ def make_handler(viewer):
             if not pairs:
                 return f'<div class="panel">Webcams: {rows}</div>'
             reason = ""
-            if collection_running():
-                reason = "Swapping is disabled while data collection runs."
+            if swap_blocked_reason():
+                reason = "Swapping is disabled: data collection has started recording episodes."
             elif not self._local():
                 reason = "Swapping is only possible on the Alienware itself."
+            elif collection_running():
+                reason = ""  # allowed until the first episode starts
+            hint = ("Data collection is running but has not recorded anything yet: you can still swap. "
+                    "Wait until the cameras are back (about 10 s) before starting the first episode."
+                    if collection_running() and not reason else "")
             buttons = "".join(
                 f'<button {"disabled" if reason else ""} onclick="swap(\'{a}\', \'{b}\')">Swap {a} and {b}</button>'
                 for a, b in pairs
             )
-            note = reason or "Use this if two cameras of the same model are in each other's place."
+            note = reason or hint or "Use this if two cameras of the same model are in each other's place."
             return f'<div class="panel">Webcams: {rows}<br>{buttons}<div class="note">{note}</div></div>'
 
         def do_POST(self):

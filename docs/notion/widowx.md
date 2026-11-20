@@ -127,8 +127,10 @@ USB webcams take a few seconds to appear (they start when someone watches).
 **Blue and yellow in each other's place?** The page has a **Swap blue and
 yellow** button: it swaps them in `usb_connector_chart.yml` and restarts only
 the webcam streams (about 10 s; the arm keeps running). Preflight keeps that
-assignment as long as the cameras stay on the same USB ports. The button is
-disabled during data collection and when the page is opened from another
+assignment as long as the cameras stay on the same USB ports. With
+`--during-collection`, swapping stays possible until the session records its
+first episode (wait ~10 s for the cameras to come back before starting it),
+then it is disabled. It is also disabled when the page is opened from another
 machine.
 
 To sanity-check the sensors by hand:

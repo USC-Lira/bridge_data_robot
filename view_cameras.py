@@ -12,7 +12,7 @@ Starts widowx_envs/widowx_envs/camera_viewer.py inside the running robonet
 container (the cameras are ROS topics there) and opens the page. Ctrl+C
 stops it. It does not run during data collection unless --during-collection
 is given. If blue and yellow are in each other's place, the page has a button
-to swap them (not during collection).
+to swap them (during collection only until the first episode is recorded).
 
 USB webcams start streaming only when someone watches them, so they can take
 a few seconds to appear.
@@ -55,7 +55,8 @@ def main() -> int:
     p.add_argument("--lan", action="store_true", help="let other machines on the network view it too")
     p.add_argument("--no-browser", action="store_true", help="do not open a browser")
     p.add_argument("--during-collection", action="store_true",
-                   help="allow it while data collection runs (swapping cameras stays disabled)")
+                   help="allow it while data collection runs (swapping cameras only until the first "
+                   "episode is recorded)")
     p.add_argument("--config", help="preflight config (.yaml/.json), if your rig differs from the defaults")
     args = p.parse_args()
 
