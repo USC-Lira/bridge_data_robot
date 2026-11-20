@@ -285,13 +285,22 @@ def hold_arm_warning() -> str:
     )
 
 
+GO_SLEEP_TIMEOUT_S = 60
+
+
 def go_to_sleep(repo_root: str, config) -> bool:
     """Move the arm to its sleep pose (go_sleep inside the container)."""
+    # With a terminal, attach it (no -T): go_sleep's output shows up, and bash
+    # does not print its "no job control in this shell" warnings.
+    tty = [] if (sys.stdin.isatty() and sys.stdout.isatty()) else ["-T"]
+    print(f"Moving the arm to neutral, then to its sleep pose (up to {GO_SLEEP_TIMEOUT_S}s)...", flush=True)
     rc, _, _ = compose(
         repo_root, config,
-        ["exec", "-T", config.compose_service, "bash", "-lic", "go_sleep"],
-        capture=False, timeout=120,
+        ["exec", *tty, config.compose_service, "bash", "-lic", "go_sleep"],
+        capture=False, timeout=GO_SLEEP_TIMEOUT_S,
     )
+    if rc == 124:
+        print(f"go_sleep did not finish within {GO_SLEEP_TIMEOUT_S}s.", flush=True)
     return rc == 0
 
 

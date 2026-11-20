@@ -43,7 +43,6 @@ def main() -> int:
         return 0
 
     if not args.no_sleep:
-        print("Moving the arm to its sleep pose...")
         if not session.go_to_sleep(REPO_ROOT, config):
             print("Could not reach the sleep pose (is the arm driver running?).")
             print("Hold the arm yourself before continuing.")
