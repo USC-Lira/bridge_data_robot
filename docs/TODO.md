@@ -125,6 +125,10 @@ Collection needs the Quest today: `VR_WidowX` reads raw headset buttons and
       same 7-number actions; metadata records the device.
 - [ ] `make_config(teleop="vr" | "keyboard" | "spacemouse")`, a controls card
       per device, preflight checks per device.
+- [x] Step 1 done in code (`teleop_devices.py`, `make_config(teleop="vr")`):
+      the env and the teleop policy go through a device; VR behaves as before
+      (checked against the old code on scripted button sequences). Still to
+      confirm on the rig with the Quest.
 - [ ] Order: (1) refactor with VR only, no behaviour change, tested on the rig;
       (2) keyboard (keys from the collection terminal, layout as in
       `teleop.py`); (3) SpaceMouse if the lab has one.

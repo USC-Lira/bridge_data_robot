@@ -224,6 +224,8 @@ COLLECTION_DEFAULTS = {
 }
 REQUIRED_METADATA = ("task", "operator")
 ENVIRONMENTS = ("vr", "intervention")
+# Input devices (widowx_envs/teleop_devices.py). Only VR exists so far.
+TELEOP_DEVICES = ("vr",)
 
 
 def _check_overrides(kind: str, overrides: Optional[dict], known: dict, extra_ok=()) -> List[str]:
@@ -244,11 +246,13 @@ EXTRA_ENV_SETTINGS = (
     "start_state", "continuous_gripper", "override_workspace_boundaries", "camera_topics",
     "depth_camera_topics", "image_crop_xywh", "num_task_stages", "make_oculus_reader",
 )
+# Set by make_config itself; overriding them through env={...} is an error.
+MANAGED_ENV_SETTINGS = ("control", "teleop")
 EXTRA_AGENT_SETTINGS = ("imax", "ask_traj_ok", "make_partial_gif", "log_dir")
 
 
 def check_settings(cameras=None, depth=False, action_mode=None, control=None, metadata=None,
-                   environment="vr", num_trajectories=None, max_seconds_per_trajectory=None,
+                   environment="vr", teleop="vr", num_trajectories=None, max_seconds_per_trajectory=None,
                    neutral_before_each=True, env=None, agent=None, collection=None, **unknown) -> Tuple[Optional[Dict], List[str], List[str]]:
     """Validate make_config() arguments. Returns (control, errors, warnings).
 
@@ -290,6 +294,8 @@ def check_settings(cameras=None, depth=False, action_mode=None, control=None, me
 
     if not isinstance(neutral_before_each, bool):
         errors.append("neutral_before_each must be True or False")
+    if teleop not in TELEOP_DEVICES:
+        errors.append(f"teleop={teleop!r}: use one of {', '.join(TELEOP_DEVICES)}")
     if environment not in ENVIRONMENTS:
         errors.append(f"environment={environment!r}: use one of {', '.join(ENVIRONMENTS)}")
     if num_trajectories is not None and (not isinstance(num_trajectories, int) or num_trajectories < 1):
@@ -298,9 +304,12 @@ def check_settings(cameras=None, depth=False, action_mode=None, control=None, me
             isinstance(max_seconds_per_trajectory, (int, float)) and max_seconds_per_trajectory > 0):
         errors.append("max_seconds_per_trajectory must be a positive number of seconds")
 
-    errors += _check_overrides("env", env, ENV_DEFAULTS, EXTRA_ENV_SETTINGS)
+    errors += _check_overrides("env", env, ENV_DEFAULTS, EXTRA_ENV_SETTINGS + MANAGED_ENV_SETTINGS)
     errors += _check_overrides("agent", agent, AGENT_DEFAULTS, EXTRA_AGENT_SETTINGS)
     errors += _check_overrides("collection", collection, COLLECTION_DEFAULTS)
+    for key in MANAGED_ENV_SETTINGS:
+        if env and key in env:
+            errors.append(f"set {key} with make_config({key}=...), not in env")
     if env and "action_mode" in env:
         errors.append("set action_mode with make_config(action_mode=...), not in env: the robot always "
                       "runs in 3trans3rot and locking happens in the teleop policy")
@@ -316,7 +325,7 @@ class ConfError(ValueError):
     pass
 
 
-def make_config(cameras, action_mode, metadata, depth=False, control=None, environment="vr",
+def make_config(cameras, action_mode, metadata, depth=False, control=None, environment="vr", teleop="vr",
                 num_trajectories=None, max_seconds_per_trajectory=100, neutral_before_each=True,
                 env=None, agent=None, collection=None):
     """Build the config dict run_data_collection.py expects.
@@ -327,7 +336,7 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
     """
     resolved, errors, warnings = check_settings(
         cameras=cameras, depth=depth, action_mode=action_mode, control=control, metadata=metadata,
-        environment=environment, num_trajectories=num_trajectories,
+        environment=environment, teleop=teleop, num_trajectories=num_trajectories,
         max_seconds_per_trajectory=max_seconds_per_trajectory, neutral_before_each=neutral_before_each,
         env=env, agent=agent, collection=collection,
     )
@@ -350,6 +359,7 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
     env_params["skip_move_to_neutral"] = not neutral_before_each
     # The env moves slowly to the fixed axes before each trajectory.
     env_params["control"] = resolved
+    env_params["teleop"] = teleop
     env_params["camera_topics"] = [IMTopic(t) for t in topics["camera_topics"]]
     if topics.get("depth_camera_topics"):
         env_params["depth_camera_topics"] = [IMTopic(t, dtype="16UC1") for t in topics["depth_camera_topics"]]
@@ -376,6 +386,7 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
     full_metadata.update({
         "action_mode": action_mode,
         "control": resolved,
+        "teleop": teleop,
         "cameras": list(cameras),
         "depth": bool(depth),
         "action_format": "xyz (m) + roll/pitch/yaw (rad) deltas + gripper (0 closed .. 1 open)",

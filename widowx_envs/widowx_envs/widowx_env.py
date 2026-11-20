@@ -160,21 +160,23 @@ class VR_WidowX(WidowXEnv):
         super(VR_WidowX, self).__init__(env_params, **kwargs)
         self.task_stage = 0
 
-        from oculus_reader import OculusReader
-        self.oculus_reader = OculusReader()
+        # LIRA: the operator's input device (see teleop_devices.py). The session
+        # steps below use its named events instead of specific VR buttons.
+        from widowx_envs.teleop_devices import make_device
+        self.device = make_device(self._hp.teleop)
+        # Kept for code that reads the headset directly (intervention, DAgger).
+        self.oculus_reader = getattr(self.device, 'reader', None)
 
     def get_vr_buttons(self):
-        poses, buttons = self.oculus_reader.get_transformations_and_buttons()
-        if 'RG' in buttons:
-            buttons['handle'] = buttons['RG']
-        else:
-            buttons['handle'] = False
-        return buttons
+        """Raw headset buttons (plus 'handle' = grip); only for VR-specific envs."""
+        return self.device.raw_buttons()
 
     def _default_hparams(self):
         default_dict = {
             'num_task_stages': 1,
             'make_oculus_reader': True,
+            # LIRA: input device, see teleop_devices.DEVICES
+            'teleop': 'vr',
             # LIRA: per-axis control from simple_conf.make_config (also given to
             # the teleop policy). Used here to move slowly to the fixed values
             # before recording, instead of jumping there on the first step.
@@ -191,7 +193,7 @@ class VR_WidowX(WidowXEnv):
         :return:  observations
         """
         obs = super(VR_WidowX, self).step(action, get_obs_tstamp, blocking)
-        if self.get_vr_buttons()['B']:
+        if self.device.snapshot()['end_trajectory']:
             self.task_stage += 1
         return obs
 
@@ -206,26 +208,26 @@ class VR_WidowX(WidowXEnv):
         self.task_stage = 0
         obs = super(VR_WidowX, self).reset(itraj=itraj)
         self._move_to_control_start()
-        start_key = 'handle'
-        print('waiting for {} button press to start recording. Press B to go to neutral, '
-              'press the right joystick to end the session.'.format(start_key))
-        buttons = self.get_vr_buttons()
-        # LIRA: react to a NEW joystick press only. The press that discarded the
-        # previous trajectory may still be held when we get here.
-        prev_rj = bool(buttons.get('RJ'))
-        while not buttons[start_key]:
-            buttons = self.get_vr_buttons()
+        d = self.device
+        print('waiting for {} to start recording. Press {} to go to neutral, {} to end the session.'.format(
+            d.label('start'), d.label('neutral'), d.label('end_session')))
+        events = d.snapshot()
+        # LIRA: react to a NEW end-session press only. On VR it is the same
+        # button that discarded the previous trajectory, which may still be held.
+        prev_end = events['end_session']
+        while not events['start']:
+            events = d.snapshot()
             rospy.sleep(0.01)
-            if 'B' in buttons and buttons['B']:
+            if events['neutral']:
                 self.move_to_neutral()
                 self._move_to_control_start()
-                print("moved to neutral. waiting for {} button press to start recording.".format(start_key))
-            rj = bool(buttons.get('RJ'))
-            if rj and not prev_rj and self._confirm_session_end():
+                print("moved to neutral. waiting for {} to start recording.".format(d.label('start')))
+            end = events['end_session']
+            if end and not prev_end and self._confirm_session_end():
                 from widowx_envs.utils.exceptions import SessionEnd
                 self.move_to_neutral()
                 raise SessionEnd()
-            prev_rj = rj
+            prev_end = end
         return self.current_obs()
 
     # LIRA: slow move to the conf's fixed axes before recording (see control_utils)
@@ -251,38 +253,40 @@ class VR_WidowX(WidowXEnv):
         self._reset_previous_qpos()
 
     def _confirm_session_end(self):
-        """LIRA: A ends the session, grip goes back to collecting."""
-        print('End the session? Press A to end it, or the grip button to keep collecting.')
-        buttons = self.get_vr_buttons()
-        prev_a = bool(buttons.get('A'))  # A may still be held from saving
+        """LIRA: 'confirm' ends the session, 'cancel' goes back to collecting."""
+        d = self.device
+        print('End the session? Press {} to end it, or {} to keep collecting.'.format(
+            d.label('confirm'), d.label('cancel')))
+        prev_confirm = d.snapshot()['confirm']  # may still be held from saving
         while True:
-            buttons = self.get_vr_buttons()
+            events = d.snapshot()
             rospy.sleep(0.01)
-            a = bool(buttons.get('A'))
-            if a and not prev_a:
+            if events['confirm'] and not prev_confirm:
                 print('Ending the session.')
                 return True
-            prev_a = a
-            if buttons.get('handle'):
-                print('Continuing. Press the grip button again to start recording.')
-                # wait for the grip to be released, so it does not start a trajectory by itself
-                while self.get_vr_buttons().get('handle'):
+            prev_confirm = events['confirm']
+            if events['cancel']:
+                print('Continuing. Press {} again to start recording.'.format(d.label('start')))
+                # wait for the release, so the same press does not start a trajectory
+                while d.snapshot()['cancel']:
                     rospy.sleep(0.01)
                 return False
 
     def ask_confirmation(self):
         print('current endeffector pos', self.get_full_state()[:3])
         print('current joint angles pos', self._controller.get_joint_angles())
-        print('Was the trajectory okay? Press A to confirm and RJ to discard')
-        buttons = self.get_vr_buttons()
-        while not buttons['A'] and not buttons['RJ']:
-            buttons = self.get_vr_buttons()
+        d = self.device
+        print('Was the trajectory okay? Press {} to save it, {} to discard it'.format(
+            d.label('save'), d.label('discard')))
+        events = d.snapshot()
+        while not events['save'] and not events['discard']:
+            events = d.snapshot()
             rospy.sleep(0.01)
 
-        if buttons['RJ']:
+        if events['discard']:
             print('trajectory discarded!')
             return False
-        if buttons['A']:
+        if events['save']:
             print('trajectory accepted!')
             return True
 

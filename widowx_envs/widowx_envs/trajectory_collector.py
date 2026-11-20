@@ -75,14 +75,16 @@ class TrajectoryCollector(Configurable):
         except SessionEnd:
             print('Session ended from the headset.')
         finally:
-            # LIRA: OculusReader streams adb logcat in a non-daemon thread that
-            # would keep the process alive after collection; stop it.
-            reader = getattr(getattr(self.agent, 'env', None), 'oculus_reader', None)
-            if reader is not None and hasattr(reader, 'stop'):
+            # LIRA: input devices may run threads that would keep the process
+            # alive after collection (OculusReader streams adb logcat in a
+            # non-daemon thread); stop the device.
+            env = getattr(self.agent, 'env', None)
+            device = getattr(env, 'device', None) or getattr(env, 'oculus_reader', None)
+            if device is not None and hasattr(device, 'stop'):
                 try:
-                    reader.stop()
+                    device.stop()
                 except Exception as exc:
-                    print('could not stop the VR reader cleanly: {}'.format(exc))
+                    print('could not stop the input device cleanly: {}'.format(exc))
 
     @timed('traj sample time: ')
     def take_sample(self, index, policy):

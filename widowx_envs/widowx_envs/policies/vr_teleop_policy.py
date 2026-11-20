@@ -23,7 +23,8 @@ class VRTeleopPolicy(Policy):
         self.last_pressed_times = {}
         self.env = ag_params.env_handle
 
-        self.reader = self.env.oculus_reader
+        # LIRA: read the operator's input through the env's device (teleop_devices.py)
+        self.device = self.env.device
         # self.prev_vr_transform = None
         self.action_space = self.env._hp.action_mode
 
@@ -51,10 +52,10 @@ class VRTeleopPolicy(Policy):
 
 
     def get_pose_and_button(self):
-        poses, buttons = self.reader.get_transformations_and_buttons()
-        if poses == {}:
+        reading = self.device.pose_input()
+        if reading is None:
             return None, None, None, None
-        return poses['r'], buttons['RTr'], buttons['rightTrig'][0], buttons['RG']
+        return reading
 
 
     def act_use_fixed_reference(self, t, i_tr, images, task_id):
