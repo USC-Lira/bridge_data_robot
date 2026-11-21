@@ -245,9 +245,48 @@ def nvidia_runtime(ctx: Context) -> CheckResult:
 # --------------------------------------------------------------------------- #
 
 
+ARM_UDEV_RULE = ('SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", '
+                 'ENV{ID_MM_DEVICE_IGNORE}="1", ATTR{device/latency_timer}="1", SYMLINK+="ttyDXL"')
+
+
+def _latency_timer_path(port: str) -> str:
+    """sysfs latency_timer of the USB serial adapter behind ``port`` (e.g. /dev/ttyDXL -> ttyUSB0)."""
+    tty = os.path.basename(os.path.realpath(port))
+    return f"/sys/bus/usb-serial/devices/{tty}/latency_timer"
+
+
+def _arm_latency(port: str) -> CheckResult:
+    """The U2D2's USB latency timer should be 1 ms (Interbotix udev rule).
+
+    At the FTDI default of 16 ms the arm driver's sync reads time out now and
+    then: '[xs_sdk] Failed syncRead: Incorrect status packet'.
+    """
+    name = "host.arm_serial_port.latency"
+    path = _latency_timer_path(port)
+    try:
+        with open(path) as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return _skip(name, f"cannot read {path}; not an FTDI USB serial adapter?")
+    if value <= 1:
+        return _ok(name, f"USB latency timer {value} ms")
+    return _warn(
+        name,
+        f"USB latency timer of the arm's serial adapter is {value} ms, should be 1 ms",
+        remedy="With it the arm driver's motor reads time out ('[xs_sdk] Failed syncRead').\n"
+        "Fix it now (until the next replug), then restart the container:\n"
+        f"  echo 1 | sudo tee {path}\n"
+        "Permanently: the Interbotix udev rule sets it on every plug-in. Put this line in\n"
+        "/etc/udev/rules.d/99-interbotix-udev.rules, then sudo udevadm control --reload-rules\n"
+        "&& sudo udevadm trigger:\n"
+        f"  {ARM_UDEV_RULE}",
+        latency_ms=value,
+    )
+
+
 @check("host.arm_serial_port", scope="host")
-def arm_serial_port(ctx: Context) -> CheckResult:
-    """The WidowX U2D2 serial link is enumerated and accessible."""
+def arm_serial_port(ctx: Context) -> List[CheckResult]:
+    """The WidowX U2D2 serial link is enumerated, accessible, and at 1 ms USB latency."""
     port = ctx.config.arm_serial_port
     if not os.path.exists(port):
         candidates = sorted(
@@ -267,7 +306,7 @@ def arm_serial_port(ctx: Context) -> CheckResult:
             f"{port} exists but is not read/write for this user",
             remedy="sudo usermod -aG dialout $USER, then log out and back in.",
         )
-    return _ok("host.arm_serial_port", f"{port} present and accessible")
+    return [_ok("host.arm_serial_port", f"{port} present and accessible"), _arm_latency(port)]
 
 
 # --------------------------------------------------------------------------- #

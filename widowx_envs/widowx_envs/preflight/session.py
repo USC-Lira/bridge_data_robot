@@ -358,6 +358,47 @@ def start(ctx: Context, force_build: bool) -> List[CheckResult]:
     return out
 
 
+ARM_ERROR_MARK = "[xs_sdk] Failed"
+ARM_LINK_WINDOW_S = 30
+ARM_LINK_FAIL_AT = 10   # errors in the window above which the link counts as broken
+
+
+def arm_link_check(repo_root: str, config) -> CheckResult:
+    """Errors the arm driver logged recently ('[xs_sdk] Failed syncRead ...').
+
+    The driver keeps publishing joint_states even when its motor reads fail, so
+    container.arm_node cannot see this; the driver's log can.
+    """
+    name = "container.arm_link"
+    service = config.compose_service
+    rc, recent_out, err = compose(repo_root, config, ["logs", "--since", f"{ARM_LINK_WINDOW_S}s", service],
+                                  timeout=60)
+    if rc != 0:
+        return CheckResult(name, Status.SKIP, "could not read the container output", details={"stderr": err[-500:]})
+    recent = sum(ARM_ERROR_MARK in line for line in recent_out.splitlines())
+    _, all_out, _ = compose(repo_root, config, ["logs", service], timeout=60)
+    total = sum(ARM_ERROR_MARK in line for line in all_out.splitlines())
+    examples = sorted({line.split(ARM_ERROR_MARK, 1)[1].strip()[:80]
+                       for line in recent_out.splitlines() if ARM_ERROR_MARK in line})[:3]
+    remedy = ("The arm driver keeps failing to read the motors over the U2D2 serial link, so\n"
+              "teleop and the recorded joint states use stale values. Usual causes, cheapest first:\n"
+              "  1. USB latency timer not 1 ms: see host.arm_serial_port.latency\n"
+              "  2. something else on the port: sudo fuser -v /dev/ttyDXL; docker ps\n"
+              "  3. cable or power: reseat the mini-USB at both ends, no hub, check the arm's PSU\n"
+              "Then restart the container (python3 stop_container.py, then preflight).")
+    if recent >= ARM_LINK_FAIL_AT:
+        return CheckResult(name, Status.FAIL,
+                           f"{recent} arm driver read errors in the last {ARM_LINK_WINDOW_S}s ({total} since start)",
+                           remedy=remedy, details={"recent": recent, "total": total, "examples": examples})
+    if recent:
+        return CheckResult(name, Status.WARN,
+                           f"{recent} arm driver read error(s) in the last {ARM_LINK_WINDOW_S}s ({total} since start)",
+                           remedy="Occasional errors are tolerable; if the count keeps growing:\n" + remedy,
+                           details={"recent": recent, "total": total, "examples": examples})
+    note = f" ({total} at startup, none since)" if total else ""
+    return CheckResult(name, Status.PASS, f"no arm driver read errors in the last {ARM_LINK_WINDOW_S}s{note}")
+
+
 def ensure_running(ctx: Context, host_failed: List[CheckResult], force_build: bool) -> List[CheckResult]:
     """Make sure the container is up for the container checks.
 
