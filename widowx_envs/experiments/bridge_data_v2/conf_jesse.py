@@ -3,7 +3,7 @@
 Only what differs between projects is set here; everything else uses the
 defaults in widowx_envs/simple_conf.py. Run it with:
 
-    python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+    python3 datacollection.py configs/conf_jesse.py
 """
 from widowx_envs.simple_conf import make_config
 

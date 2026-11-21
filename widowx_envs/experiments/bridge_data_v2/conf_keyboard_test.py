@@ -6,7 +6,7 @@ Keys are typed in the collection terminal. The default layout is in
 widowx_envs/widowx_envs/teleop_profiles.py; keyboard_profile_example.yaml
 shows how to change some keys and the speeds. Run it with:
 
-    python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_keyboard_test.py --preflight
+    python3 datacollection.py configs/conf_keyboard_test.py --preflight
 """
 from widowx_envs.simple_conf import make_config
 

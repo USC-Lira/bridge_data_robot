@@ -10,7 +10,11 @@ only some of them:
       gripper_toggle: g
     linear_speed_m_s: 0.02
 
-and use it with make_config(teleop="keyboard", teleop_profile="my_keys.yaml").
+and use it with make_config(teleop="keyboard", teleop_profile="my_keys"): a name
+is looked up in configs/profiles/ (my_keys.yaml, .yml or .json); a path is
+relative to the conf's folder. Profiles must stay inside widowx_envs/ (the
+configs/ folder is), because collection runs in the container, which only
+sees that folder.
 
 Plain Python (PyYAML only for .yaml files), so preflight checks profiles on
 the host with the same rules the keyboard device uses.
@@ -79,11 +83,41 @@ MAX_LINEAR_M_S = 0.10
 MAX_ANGULAR_DEG_S = 60.0
 
 
+PROFILE_DIR = "profiles"
+PROFILE_EXTENSIONS = (".yaml", ".yml", ".json")
+
+
 def resolve_path(path, base_dir=None):
-    """A profile path as written in a conf: absolute, or relative to the conf's folder."""
+    """A profile as written in a conf: a name from <conf folder>/profiles/, or a path.
+
+    Tried in order: the path relative to the conf's folder, then
+    profiles/<path>, then profiles/<path> with .yaml/.yml/.json added. Returns
+    the first that exists, else the plain relative path (reported as missing).
+    """
     if os.path.isabs(path) or not base_dir:
         return path
-    return os.path.join(base_dir, path)
+    candidates = [os.path.join(base_dir, path), os.path.join(base_dir, PROFILE_DIR, path)]
+    if not path.endswith(PROFILE_EXTENSIONS):
+        candidates += [os.path.join(base_dir, PROFILE_DIR, path + ext) for ext in PROFILE_EXTENSIONS]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return candidates[0]
+
+
+def container_visible(path, conf_dir):
+    """Whether ``path`` lies inside the widowx_envs/ folder the conf is in.
+
+    Only that folder is mounted into the container, where collection loads
+    the profile. None if the conf itself is not under widowx_envs/experiments.
+    """
+    real_conf = os.path.realpath(conf_dir)
+    marker = os.sep + "widowx_envs" + os.sep + "experiments"
+    idx = real_conf.rfind(marker)
+    if idx < 0:
+        return None
+    root = real_conf[:idx + len(os.sep + "widowx_envs")]
+    return os.path.realpath(path).startswith(root + os.sep)
 
 
 def load_profile(path=None):

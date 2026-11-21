@@ -215,25 +215,25 @@ Topics built in a loop or imported from another module are invisible to the
 cd ~/bridge_data_robot
 
 # full check against the config you are about to collect with
-python3 widowx_envs/widowx_envs/preflight/preflight.py \
-    --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+python3 preflight.py \
+    --conf configs/conf_jesse.py
 
 # check only, never start the container
-python3 widowx_envs/widowx_envs/preflight/preflight.py --no-start
+python3 preflight.py --no-start
 
 # force an image rebuild before starting
-python3 widowx_envs/widowx_envs/preflight/preflight.py --build --conf ...
+python3 preflight.py --build --conf ...
 
 # host only
-python3 widowx_envs/widowx_envs/preflight/preflight.py --scope host
+python3 preflight.py --scope host
 
 # one check while you debug it
-python3 widowx_envs/widowx_envs/preflight/preflight.py --only host.usb_connector_chart -v
+python3 preflight.py --only host.usb_connector_chart -v
 
 # machine-readable, for a session log
-python3 widowx_envs/widowx_envs/preflight/preflight.py --json preflight_report.json
+python3 preflight.py --json preflight_report.json
 
-python3 widowx_envs/widowx_envs/preflight/preflight.py --list
+python3 preflight.py --list
 ```
 
 Exit codes: `0` clear (possibly with warnings), `1` at least one blocking
