@@ -10,7 +10,12 @@ from widowx_envs.simple_conf import make_config
 
 config = make_config(
     cameras=["blue", "yellow"],
-    action_mode="2trans",            # position + yaw is easiest to drive from a keyboard
+    action_mode="custom",            # position + yaw is easiest to drive from a keyboard
+    control={
+        "x": "teleop", "y": "teleop", "z": 0.016,
+        "roll": "hold", "pitch": "hold", "yaw": "hold",
+        "gripper": "teleop",
+    },
     teleop="keyboard",
     teleop_profile="keyboard_profile_example.yaml",   # optional: your own keys / speeds
     metadata={
