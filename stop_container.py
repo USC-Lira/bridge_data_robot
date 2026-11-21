@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Stop the robonet container safely.
 
-Stopping the container stops the arm driver, which turns the arm's motors off:
-an arm that is not resting falls onto the table. So this script
+When the arm driver stops, the motors keep holding their last position, and
+the arm drops the next time a driver starts. So this script
 
-  1. moves the arm to its sleep pose (go_sleep inside the container),
-  2. asks you to confirm the arm is resting or held,
-  3. stops and removes the container.
+  1. moves the arm to its sleep pose (go_sleep inside the container); it gives
+     up after 3 arm driver read errors, i.e. when the motors do not respond,
+  2. asks you to confirm you are holding the arm,
+  3. switches the motors' torque off, so the arm goes limp in your hands
+     (if the link to the motors is broken it cannot: then switch the arm's
+     power off and on while holding it),
+  4. stops and removes the container.
 
     python3 stop_container.py            # from the repo root
-    python3 stop_container.py --no-sleep # skip step 1 (e.g. the arm driver is not responding)
+    python3 stop_container.py --no-sleep # skip step 1
     python3 stop_container.py --yes      # do not ask in step 2
 
 Start it again with preflight, which also re-checks everything:
@@ -44,21 +48,20 @@ def main() -> int:
 
     if not args.no_sleep:
         if not session.go_to_sleep(REPO_ROOT, config):
-            print("Could not reach the sleep pose (is the arm driver running?).")
-            print("Hold the arm yourself before continuing.")
+            print("The arm is not in its sleep pose: hold it yourself before continuing.")
 
     print()
     print(session.hold_arm_warning())
     if not args.yes:
         try:
-            answer = input(f"Stop the {service} container now? [y/N] ").strip().lower()
+            answer = input(f"Holding the arm? Switch its motors off and stop the {service} container now? [y/N] ").strip().lower()
         except EOFError:
             answer = ""
         if answer not in ("y", "yes"):
             print("Not stopped.")
             return 1
 
-    if not session.stop(REPO_ROOT, config):
+    if not session.release_and_stop(REPO_ROOT, config):
         print(f"Stopping failed. Try by hand: docker compose stop {service}")
         return 1
     print(f"{service} stopped. Remember to power the arm off if you are done.")
