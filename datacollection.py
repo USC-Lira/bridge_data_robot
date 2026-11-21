@@ -64,8 +64,43 @@ CONTROLS = """
 """
 
 
+def conf_teleop(conf_path):
+    """(teleop device, profile path) from a make_config conf, or ("vr", None)."""
+    try:
+        from widowx_envs.preflight.config import read_make_config
+        mc = read_make_config(conf_path) or {}
+    except Exception:
+        return "vr", None
+    profile = mc.get("teleop_profile")
+    if profile and not os.path.isabs(profile):
+        profile = os.path.join(os.path.dirname(os.path.abspath(conf_path)), profile)
+    return mc.get("teleop", "vr"), profile
+
+
+def keyboard_card(conf_path) -> str:
+    """Controls card for keyboard teleop, from the conf's controls profile."""
+    from widowx_envs.preflight.config import read_make_config
+    from widowx_envs.simple_conf import resolve_control
+    from widowx_envs.teleop_profiles import describe_profile, load_profile
+    _, profile_path = conf_teleop(conf_path)
+    note = ""
+    try:
+        profile = load_profile(profile_path)
+    except ImportError:
+        profile, note = load_profile(None), " (default keys shown: PyYAML is needed to read your profile here)"
+    mc = read_make_config(conf_path) or {}
+    control, _ = resolve_control(mc.get("action_mode"), mc.get("control"))
+    title = "  KEYBOARD CONTROLS (type in this terminal)  "
+    lines = ["", title.center(65, "="), *describe_profile(profile, control)]
+    if note:
+        lines.append(note)
+    return "\n".join(lines) + "\n" + "=" * 65 + "\n"
+
+
 def controls_card(conf_path=None) -> str:
     """The controls card, plus which axes this conf locks (if it uses make_config)."""
+    if conf_path and os.path.exists(conf_path) and conf_teleop(conf_path)[0] == "keyboard":
+        return keyboard_card(conf_path)
     card = CONTROLS
     if not conf_path or not os.path.exists(conf_path):
         return card
@@ -193,16 +228,25 @@ def main() -> int:
         print("Not started. The container keeps running; run this again when ready,\n"
               "or stop it with: python3 stop_container.py")
         return 0
-    if not confirm_headset():
+    teleop, _ = conf_teleop(args.conf)
+    if teleop == "vr" and not confirm_headset():
         print("Not started. Run this again when the headset is ready.")
         return 0
 
     cmd = collection_command(args.conf, config)
-    window = open_controls_window(args.conf)
-    if window:
-        print("\nThe VR controls are in a separate 'WidowX VR controls' window.")
+    window = None
+    if teleop == "keyboard":
+        # Keys are read from this terminal, so keep the card here: a separate
+        # window would take the keyboard focus.
+        print(controls_card(args.conf))
+        print("Keep THIS terminal focused while collecting: the keys you type go to the robot.")
+        print("(Answer run_data_collection.py's first question with y + Enter as usual.)")
     else:
-        print(controls_card(args.conf))  # no desktop to open a window on
+        window = open_controls_window(args.conf)
+        if window:
+            print("\nThe VR controls are in a separate 'WidowX VR controls' window.")
+        else:
+            print(controls_card(args.conf))  # no desktop to open a window on
     print(f"Starting data collection with {os.path.basename(args.conf)}.\n", flush=True)
     try:
         rc = subprocess.run(cmd, cwd=REPO_ROOT, env=session.compose_env(REPO_ROOT, config)).returncode

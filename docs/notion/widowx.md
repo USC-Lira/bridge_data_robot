@@ -220,6 +220,41 @@ A trajectory also ends by itself after the conf's `T` steps. Move smoothly:
 a sudden jump prints `delta transform too large!` and pauses in the terminal;
 type `c` and Enter to continue.
 
+#### Without the headset: the keyboard
+
+Set `teleop="keyboard"` in the conf (see `conf_keyboard_example.py`). Keys are
+typed **in the collection terminal**, so keep it focused; the controls card is
+printed there, and preflight skips the headset check.
+
+| Keys (default) | Action |
+|---|---|
+| `W`/`S`, `A`/`D`, `Z`/`C` | move forward/back, left/right, up/down while held |
+| `I`/`K`, `J`/`L`, `N`/`M` | yaw, pitch, roll while held |
+| `space` | gripper open / closed |
+| `[` / `]` | close / open the gripper a step |
+| `+` / `-` | faster / slower (x0.5, x1, x2; default 3 cm/s and 15°/s) |
+| `Enter` | start recording / end the trajectory |
+| `Y` / `X` | save / discard the trajectory |
+| `H` | arm to neutral (before recording) |
+| `Q` | end the session (then `Y` to confirm, `N` to keep going) |
+
+Release the keys and the arm stops. Axes the conf locks ignore their keys. The
+terminal repeats a held key after a short pause, so motion starts with a small
+step before it becomes smooth.
+
+**Your own keys:** write a profile with only what you want to change, and
+point the conf at it with `teleop_profile="my_keys.yaml"` (relative to the
+conf). `keyboard_profile_example.yaml` shows the format (keys, speeds, gripper
+step). Preflight checks it: unknown actions, invalid keys, and one key used
+twice in the same phase (the same key in different phases is fine, like
+`Enter` for start and end).
+
+**Your own controller:** subclass `TeleopDevice` in
+`widowx_envs/widowx_envs/teleop_devices.py` (session events through
+`snapshot()`, motion through `rate_input()` or `pose_input()`), and use it with
+`teleop="your_module:YourDevice"`. It gets the per-axis locks, the safe start
+pose and the common 7-number action format automatically.
+
 ### Where the data lands
 
 Inside the container under `$DATA` (`/home/robonet/trainingdata`), which is

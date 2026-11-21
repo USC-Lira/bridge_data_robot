@@ -367,7 +367,8 @@ def conf_settings(ctx: Context) -> List[CheckResult]:
                 mc.pop("control", None)
                 mc["action_mode"] = "3trans3rot"
 
-    control, errors, warnings = check_settings(**mc)
+    ctx.cache["conf_teleop"] = mc.get("teleop", "vr")
+    control, errors, warnings = check_settings(conf_dir=os.path.dirname(os.path.abspath(conf_path)), **mc)
     if errors:
         results.append(_fail(
             name,
@@ -381,7 +382,8 @@ def conf_settings(ctx: Context) -> List[CheckResult]:
 
     follows = [a for a in control if control[a] == "teleop"]
     locked = describe_control(control)
-    summary = f"action_mode={mc.get('action_mode')}; follows the hand: {', '.join(follows) or 'nothing'}"
+    summary = (f"teleop={mc.get('teleop', 'vr')}, action_mode={mc.get('action_mode')}; "
+               f"teleoperated: {', '.join(follows) or 'nothing'}")
     if locked:
         summary += "; " + "; ".join(l.split(" (")[0] for l in locked)
     md = mc.get("metadata") or {}
@@ -841,6 +843,9 @@ def vr_headset(ctx: Context) -> CheckResult:
     name = "host.vr_headset"
     if not ctx.config.require_vr_headset:
         return _skip(name, "teleop not required by config")
+    teleop = ctx.cache.get("conf_teleop", "vr")
+    if teleop != "vr":
+        return _skip(name, f"not needed: the conf teleoperates with {teleop!r}")
     if not ctx.have("adb"):
         return _fail(name, "adb is not installed on the host", remedy="sudo apt install android-tools-adb")
 
