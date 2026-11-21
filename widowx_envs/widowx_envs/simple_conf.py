@@ -224,6 +224,8 @@ COLLECTION_DEFAULTS = {
 }
 REQUIRED_METADATA = ("task", "operator")
 ENVIRONMENTS = ("vr", "intervention")
+# Input devices (widowx_envs/teleop_devices.py); a custom one is "module:Class".
+TELEOP_DEVICES = ("vr", "keyboard")
 
 
 def _check_overrides(kind: str, overrides: Optional[dict], known: dict, extra_ok=()) -> List[str]:
@@ -244,12 +246,15 @@ EXTRA_ENV_SETTINGS = (
     "start_state", "continuous_gripper", "override_workspace_boundaries", "camera_topics",
     "depth_camera_topics", "image_crop_xywh", "num_task_stages", "make_oculus_reader",
 )
+# Set by make_config itself; overriding them through env={...} is an error.
+MANAGED_ENV_SETTINGS = ("control", "teleop", "teleop_profile")
 EXTRA_AGENT_SETTINGS = ("imax", "ask_traj_ok", "make_partial_gif", "log_dir")
 
 
 def check_settings(cameras=None, depth=False, action_mode=None, control=None, metadata=None,
-                   environment="vr", num_trajectories=None, max_seconds_per_trajectory=None,
-                   neutral_before_each=True, env=None, agent=None, collection=None, **unknown) -> Tuple[Optional[Dict], List[str], List[str]]:
+                   environment="vr", teleop="vr", teleop_profile=None, num_trajectories=None,
+                   max_seconds_per_trajectory=None, neutral_before_each=True, env=None, agent=None,
+                   collection=None, conf_dir=None, **unknown) -> Tuple[Optional[Dict], List[str], List[str]]:
     """Validate make_config() arguments. Returns (control, errors, warnings).
 
     Plain Python, so preflight runs exactly these checks on the host.
@@ -274,7 +279,8 @@ def check_settings(cameras=None, depth=False, action_mode=None, control=None, me
     errors += control_errors
     if resolved:
         errors += position_errors(resolved)
-        warnings += angle_warnings(resolved)
+        if action_mode == "custom":  # presets lock angles at 0, far from gimbal lock
+            warnings += angle_warnings(resolved)
         if any(isinstance(resolved[a], (int, float)) and not isinstance(resolved[a], bool)
                for a in POSITION_AXES):
             warnings.append("a fixed x/y/z is an absolute position in the robot's base frame: before "
@@ -290,6 +296,18 @@ def check_settings(cameras=None, depth=False, action_mode=None, control=None, me
 
     if not isinstance(neutral_before_each, bool):
         errors.append("neutral_before_each must be True or False")
+    custom_device = isinstance(teleop, str) and ":" in teleop
+    if teleop not in TELEOP_DEVICES and not custom_device:
+        errors.append(f"teleop={teleop!r}: use one of {', '.join(TELEOP_DEVICES)}, or 'module:Class' "
+                      "for a custom controller")
+    if custom_device:
+        warnings.append(f"teleop={teleop!r} is a custom controller: it is loaded and checked only when "
+                        "collection starts")
+    if teleop_profile is not None:
+        if teleop != "keyboard":
+            errors.append("teleop_profile is only used with teleop='keyboard'")
+        else:
+            errors += profile_errors(teleop_profile, conf_dir, warnings)
     if environment not in ENVIRONMENTS:
         errors.append(f"environment={environment!r}: use one of {', '.join(ENVIRONMENTS)}")
     if num_trajectories is not None and (not isinstance(num_trajectories, int) or num_trajectories < 1):
@@ -298,13 +316,33 @@ def check_settings(cameras=None, depth=False, action_mode=None, control=None, me
             isinstance(max_seconds_per_trajectory, (int, float)) and max_seconds_per_trajectory > 0):
         errors.append("max_seconds_per_trajectory must be a positive number of seconds")
 
-    errors += _check_overrides("env", env, ENV_DEFAULTS, EXTRA_ENV_SETTINGS)
+    errors += _check_overrides("env", env, ENV_DEFAULTS, EXTRA_ENV_SETTINGS + MANAGED_ENV_SETTINGS)
     errors += _check_overrides("agent", agent, AGENT_DEFAULTS, EXTRA_AGENT_SETTINGS)
     errors += _check_overrides("collection", collection, COLLECTION_DEFAULTS)
+    for key in MANAGED_ENV_SETTINGS:
+        if env and key in env:
+            errors.append(f"set {key} with make_config({key}=...), not in env")
     if env and "action_mode" in env:
         errors.append("set action_mode with make_config(action_mode=...), not in env: the robot always "
                       "runs in 3trans3rot and locking happens in the teleop policy")
     return resolved, errors, warnings
+
+
+def profile_errors(path, conf_dir, warnings):
+    """Problems with a keyboard controls profile file (teleop_profiles.py)."""
+    from widowx_envs.teleop_profiles import check_profile, load_profile, resolve_path
+    full = resolve_path(path, conf_dir)
+    if not os.path.exists(full):
+        return [f"teleop_profile {path!r} not found (looked at {full})"]
+    try:
+        profile = load_profile(full)
+    except ImportError:
+        warnings.append(f"cannot check {path} here: reading .yaml needs PyYAML (sudo apt install "
+                        "python3-yaml); it is checked when collection starts")
+        return []
+    except (ValueError, OSError) as exc:
+        return [f"teleop_profile {path}: {exc}"]
+    return [f"teleop_profile {path}: {p}" for p in check_profile(profile)]
 
 
 # --------------------------------------------------------------------------- #
@@ -316,7 +354,8 @@ class ConfError(ValueError):
     pass
 
 
-def make_config(cameras, action_mode, metadata, depth=False, control=None, environment="vr",
+def make_config(cameras, action_mode, metadata, depth=False, control=None, environment="vr", teleop="vr",
+                teleop_profile=None,
                 num_trajectories=None, max_seconds_per_trajectory=100, neutral_before_each=True,
                 env=None, agent=None, collection=None):
     """Build the config dict run_data_collection.py expects.
@@ -325,9 +364,15 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
     operator). Everything else has the defaults the hand-written conf files
     used; env / agent / collection override any individual setting.
     """
+    # The conf file that called us: run_data_collection.py names the data
+    # folder after its location (e.g. bridge_data_v2); profiles are relative to it.
+    caller = inspect.stack()[1].filename
+    current_dir = os.path.dirname(os.path.realpath(caller))
+
     resolved, errors, warnings = check_settings(
         cameras=cameras, depth=depth, action_mode=action_mode, control=control, metadata=metadata,
-        environment=environment, num_trajectories=num_trajectories,
+        environment=environment, teleop=teleop, teleop_profile=teleop_profile, conf_dir=current_dir,
+        num_trajectories=num_trajectories,
         max_seconds_per_trajectory=max_seconds_per_trajectory, neutral_before_each=neutral_before_each,
         env=env, agent=agent, collection=collection,
     )
@@ -338,7 +383,15 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
 
     from multicam_server.topic_utils import IMTopic
     from widowx_envs.control_loops import TimedLoop
+    from widowx_envs.policies.rate_teleop_policy import RateTeleopPolicy
     from widowx_envs.policies.vr_teleop_policy import VRTeleopPolicy
+    from widowx_envs.teleop_devices import device_class
+    from widowx_envs.teleop_profiles import load_profile, resolve_path
+
+    # Absolute devices (VR) follow a pose; rate devices (keyboard, ...) move at a
+    # speed while held. Both end in the same per-axis control and action format.
+    policy_class = VRTeleopPolicy if device_class(teleop).motion == "absolute" else RateTeleopPolicy
+    profile_path = resolve_path(teleop_profile, current_dir) if teleop_profile else None
 
     if environment == "intervention":
         from widowx_envs.widowx_intervention_env import InterventionWidowX as env_class
@@ -350,6 +403,8 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
     env_params["skip_move_to_neutral"] = not neutral_before_each
     # The env moves slowly to the fixed axes before each trajectory.
     env_params["control"] = resolved
+    env_params["teleop"] = teleop
+    env_params["teleop_profile"] = profile_path
     env_params["camera_topics"] = [IMTopic(t) for t in topics["camera_topics"]]
     if topics.get("depth_camera_topics"):
         env_params["depth_camera_topics"] = [IMTopic(t, dtype="16UC1") for t in topics["depth_camera_topics"]]
@@ -362,10 +417,6 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
     agent_params["type"] = TimedLoop
     agent_params["env"] = (env_class, env_params)
 
-    # The conf file that called us: run_data_collection.py names the data
-    # folder after its location (e.g. bridge_data_v2).
-    caller = inspect.stack()[1].filename
-    current_dir = os.path.dirname(os.path.realpath(caller))
     config = dict(copy.deepcopy(COLLECTION_DEFAULTS))
     if num_trajectories:
         config["end_index"] = num_trajectories - 1
@@ -376,6 +427,10 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
     full_metadata.update({
         "action_mode": action_mode,
         "control": resolved,
+        "teleop": teleop,
+        # The controls used, so a dataset says how it was teleoperated.
+        **({"teleop_profile": {k: v for k, v in load_profile(profile_path).items() if k != "bindings"}}
+           if teleop == "keyboard" else {}),
         "cameras": list(cameras),
         "depth": bool(depth),
         "action_format": "xyz (m) + roll/pitch/yaw (rad) deltas + gripper (0 closed .. 1 open)",
@@ -384,6 +439,6 @@ def make_config(cameras, action_mode, metadata, depth=False, control=None, envir
         "current_dir": current_dir,
         "metadata": full_metadata,
         "agent": agent_params,
-        "policy": {"type": VRTeleopPolicy, "control": resolved},
+        "policy": {"type": policy_class, "control": resolved},
     })
     return config

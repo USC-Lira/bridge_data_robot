@@ -109,24 +109,18 @@ the container check fail while they are empty. Each session folder also gets
       which avoids this in the normal flow; mounting the host's `~/.android`
       into the container in `docker-compose.yml` would rule it out.
 
-## Teleoperation without the VR headset (to discuss)
+## Teleoperation without the VR headset
 
-Collection needs the Quest today: `VR_WidowX` reads raw headset buttons and
-`VRTeleopPolicy` follows the controller pose. Proposed design, not started:
+Done in code, still to try on the rig: `teleop_devices.py` (device layer, VR
+and keyboard), `teleop_profiles.py` (keyboard controls profiles),
+`RateTeleopPolicy`, `make_config(teleop=..., teleop_profile=...)`. Decided:
+keyboard only (no SpaceMouse), keys read from the collection terminal, gripper
+both as a toggle and in steps.
 
-- [ ] An input-device layer between the operator and the env. Every device
-      provides the session events (start trajectory, end trajectory, save,
-      discard, go to neutral, end session); the env waits for events instead
-      of specific buttons. VR maps them to today's buttons.
-- [ ] Two motion styles feeding the same pipeline: VR = absolute pose with a
-      clutch (as today); keyboard / SpaceMouse = rate control (fixed speed
-      while held, capped, e.g. 3 cm/s and 15 deg/s). Both produce a target
-      pose that goes through the same `apply_control`, so datasets keep the
-      same 7-number actions; metadata records the device.
-- [ ] `make_config(teleop="vr" | "keyboard" | "spacemouse")`, a controls card
-      per device, preflight checks per device.
-- [ ] Order: (1) refactor with VR only, no behaviour change, tested on the rig;
-      (2) keyboard (keys from the collection terminal, layout as in
-      `teleop.py`); (3) SpaceMouse if the lab has one.
-- [ ] Open questions: SpaceMouse or keyboard only; keys from the terminal OK;
-      gripper as toggle or in steps.
+- [ ] Confirm VR still behaves as before on the rig (step 1 was checked
+      against the old code on scripted button sequences only).
+- [ ] Try keyboard collection on the rig: speeds, the hold window
+      (`KeyboardDevice.HOLD_S`) against the terminal's key repeat, comfort of
+      the default layout.
+- [ ] Custom controllers (`teleop="module:Class"`) are loaded only when
+      collection starts; preflight cannot check them on the host.
