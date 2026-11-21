@@ -280,28 +280,117 @@ def wait_until_ready(repo_root: str, config, timeout: Optional[float] = None) ->
 
 def hold_arm_warning() -> str:
     return (
-        "!! HOLD THE ARM. Stopping the container turns the arm's motors off and the\n"
-        "!! arm drops onto the table unless it is resting in its sleep pose."
+        "!! HOLD THE ARM. Its motors are switched off next (the arm goes limp in your\n"
+        "!! hands, or rests if it is in its sleep pose), then the container stops."
     )
 
 
+UNPLUG_INSTRUCTIONS = (
+    "The arm's motors cannot be reached, so they cannot be switched off from here and the\n"
+    "arm stays stiff. HOLD THE ARM and UNPLUG ITS POWER SUPPLY CABLE: the motors go limp\n"
+    "and you lower it. (Plug it back in before the next session.)"
+)
+
+
+def _wait_for_unplug() -> None:
+    print(UNPLUG_INSTRUCTIONS, flush=True)
+    if sys.stdin.isatty():
+        try:
+            input("Press Enter once the arm's power cable is unplugged. ")
+        except EOFError:
+            pass
+
+
+def release_and_stop(repo_root: str, config) -> bool:
+    """Release the motors (the operator is holding the arm), then stop the container.
+
+    With a broken link to the motors (arm driver read errors right now) the
+    torque-off command cannot reach them; the operator unplugs the arm's power
+    supply instead, while holding it.
+    """
+    if arm_errors_since(repo_root, config, 5) >= GO_SLEEP_MAX_ARM_ERRORS:
+        _wait_for_unplug()
+    else:
+        print("Switching the arm's motors off...", flush=True)
+        if release_motors(repo_root, config):
+            print("Motors off: the arm is free (lower it gently if you are holding it).", flush=True)
+        else:
+            _wait_for_unplug()
+    return stop(repo_root, config)
+
+
 GO_SLEEP_TIMEOUT_S = 60
+GO_SLEEP_MAX_ARM_ERRORS = 3   # driver read errors after which the sleep pose is skipped
+
+
+def arm_errors_since(repo_root: str, config, seconds: float) -> int:
+    """Arm driver read errors ('[xs_sdk] Failed ...') logged in the last ``seconds``."""
+    rc, out, _ = compose(repo_root, config,
+                         ["logs", "--since", f"{max(1, int(seconds + 0.999))}s", config.compose_service],
+                         timeout=30)
+    return sum(ARM_ERROR_MARK in line for line in out.splitlines()) if rc == 0 else 0
 
 
 def go_to_sleep(repo_root: str, config) -> bool:
-    """Move the arm to its sleep pose (go_sleep inside the container)."""
+    """Move the arm to its sleep pose (go_sleep inside the container).
+
+    Gives up as soon as the arm driver logs GO_SLEEP_MAX_ARM_ERRORS read
+    errors: with a failing link the motors do not respond, and waiting only
+    floods the terminal.
+    """
     # With a terminal, attach it (no -T): go_sleep's output shows up, and bash
     # does not print its "no job control in this shell" warnings.
     tty = [] if (sys.stdin.isatty() and sys.stdout.isatty()) else ["-T"]
     print(f"Moving the arm to neutral, then to its sleep pose (up to {GO_SLEEP_TIMEOUT_S}s)...", flush=True)
-    rc, _, _ = compose(
+    cmd = ["docker", "compose", "exec", *tty, config.compose_service, "bash", "-lic", "go_sleep"]
+    started = time.time()
+    proc = subprocess.Popen(cmd, cwd=repo_root, env=compose_env(repo_root, config))
+    while proc.poll() is None:
+        time.sleep(1)
+        elapsed = time.time() - started
+        errors = arm_errors_since(repo_root, config, elapsed + 1)
+        reason = None
+        if errors >= GO_SLEEP_MAX_ARM_ERRORS:
+            reason = (f"the arm's motors are not responding ({errors} driver read errors): "
+                      "skipping the sleep pose")
+        elif elapsed > GO_SLEEP_TIMEOUT_S:
+            reason = f"go_sleep did not finish within {GO_SLEEP_TIMEOUT_S}s"
+        if reason:
+            _abort_go_sleep(repo_root, config, proc)
+            print(f"\n{reason}.", flush=True)
+            return False
+    return proc.returncode == 0
+
+
+def _abort_go_sleep(repo_root: str, config, proc) -> None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    # Ending `docker compose exec` does not always end the process inside.
+    compose(repo_root, config, ["exec", "-T", config.compose_service, "pkill", "-f", "go_to_sleep_pose"],
+            timeout=15)
+
+
+def release_motors(repo_root: str, config) -> bool:
+    """Switch the arm's motor torque off, so it goes limp (the operator holds it).
+
+    Otherwise the motors keep holding their last position after the driver
+    stops, and the arm drops when the next driver start resets them. Needs a
+    working link to the motors; returns False if the command did not go through.
+    """
+    arm = config.arm_model
+    request = "{cmd_type: 'group', name: 'all', enable: false}"
+    started = time.time()
+    rc, out, err = compose(
         repo_root, config,
-        ["exec", *tty, config.compose_service, "bash", "-lic", "go_sleep"],
-        capture=False, timeout=GO_SLEEP_TIMEOUT_S,
+        ["exec", "-T", config.compose_service, "bash", "-lic",
+         f'rosservice call /{arm}/torque_enable "{request}"'],
+        timeout=20,
     )
-    if rc == 124:
-        print(f"go_sleep did not finish within {GO_SLEEP_TIMEOUT_S}s.", flush=True)
-    return rc == 0
+    failed_link = arm_errors_since(repo_root, config, time.time() - started + 1) >= GO_SLEEP_MAX_ARM_ERRORS
+    return rc == 0 and "ERROR" not in (out + err) and not failed_link
 
 
 def stop(repo_root: str, config) -> bool:
@@ -358,6 +447,47 @@ def start(ctx: Context, force_build: bool) -> List[CheckResult]:
     return out
 
 
+ARM_ERROR_MARK = "[xs_sdk] Failed"
+ARM_LINK_WINDOW_S = 30
+ARM_LINK_FAIL_AT = 10   # errors in the window above which the link counts as broken
+
+
+def arm_link_check(repo_root: str, config) -> CheckResult:
+    """Errors the arm driver logged recently ('[xs_sdk] Failed syncRead ...').
+
+    The driver keeps publishing joint_states even when its motor reads fail, so
+    container.arm_node cannot see this; the driver's log can.
+    """
+    name = "container.arm_link"
+    service = config.compose_service
+    rc, recent_out, err = compose(repo_root, config, ["logs", "--since", f"{ARM_LINK_WINDOW_S}s", service],
+                                  timeout=60)
+    if rc != 0:
+        return CheckResult(name, Status.SKIP, "could not read the container output", details={"stderr": err[-500:]})
+    recent = sum(ARM_ERROR_MARK in line for line in recent_out.splitlines())
+    _, all_out, _ = compose(repo_root, config, ["logs", service], timeout=60)
+    total = sum(ARM_ERROR_MARK in line for line in all_out.splitlines())
+    examples = sorted({line.split(ARM_ERROR_MARK, 1)[1].strip()[:80]
+                       for line in recent_out.splitlines() if ARM_ERROR_MARK in line})[:3]
+    remedy = ("The arm driver keeps failing to read the motors over the U2D2 serial link, so\n"
+              "teleop and the recorded joint states use stale values. Usual causes, cheapest first:\n"
+              "  1. USB latency timer not 1 ms: see host.arm_serial_port.latency\n"
+              "  2. something else on the port: sudo fuser -v /dev/ttyDXL; docker ps\n"
+              "  3. cable or power: reseat the mini-USB at both ends, no hub, check the arm's PSU\n"
+              "Then restart the container (python3 stop_container.py, then preflight).")
+    if recent >= ARM_LINK_FAIL_AT:
+        return CheckResult(name, Status.FAIL,
+                           f"{recent} arm driver read errors in the last {ARM_LINK_WINDOW_S}s ({total} since start)",
+                           remedy=remedy, details={"recent": recent, "total": total, "examples": examples})
+    if recent:
+        return CheckResult(name, Status.WARN,
+                           f"{recent} arm driver read error(s) in the last {ARM_LINK_WINDOW_S}s ({total} since start)",
+                           remedy="Occasional errors are tolerable; if the count keeps growing:\n" + remedy,
+                           details={"recent": recent, "total": total, "examples": examples})
+    note = f" ({total} at startup, none since)" if total else ""
+    return CheckResult(name, Status.PASS, f"no arm driver read errors in the last {ARM_LINK_WINDOW_S}s{note}")
+
+
 def ensure_running(ctx: Context, host_failed: List[CheckResult], force_build: bool) -> List[CheckResult]:
     """Make sure the container is up for the container checks.
 
@@ -384,8 +514,9 @@ def ensure_running(ctx: Context, host_failed: List[CheckResult], force_build: bo
         print(hold_arm_warning(), flush=True)
         if ctx.ask("Move the arm to its sleep pose and restart the container now?", default=False):
             go_to_sleep(repo_root, config)
-            ctx.ask("Arm resting or held? Press Enter to stop the container", default=True, yes_no=False)
-            stop(repo_root, config)
+            ctx.ask("Holding the arm (or is it resting)? Press Enter to switch its motors off and "
+                    "stop the container", default=True, yes_no=False)
+            release_and_stop(repo_root, config)
             return start(ctx, force_build)
         return [CheckResult(ROW, Status.WARN, msg + "; not restarted",
                             remedy="Restart later with: python3 stop_container.py, then re-run preflight.")]

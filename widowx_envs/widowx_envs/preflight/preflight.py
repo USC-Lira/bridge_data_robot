@@ -291,6 +291,11 @@ def main(argv=None) -> int:
             print_report(results[-1:], "WidowX preflight - container (ROS)")
         else:
             container_results = run_container_checks_from_host(args, config, repo_root)
+            # Read from the host: the arm driver's own log (docker compose logs).
+            if not args.only or any("container.arm_link".startswith(p) or p.startswith("container.arm")
+                                    for p in args.only):
+                from widowx_envs.preflight import session as _session
+                container_results.append(_session.arm_link_check(repo_root, config))
             results += container_results
             print_report(container_results, "WidowX preflight - container (ROS)")
 
