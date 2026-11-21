@@ -330,10 +330,13 @@ def check_settings(cameras=None, depth=False, action_mode=None, control=None, me
 
 def profile_errors(path, conf_dir, warnings):
     """Problems with a keyboard controls profile file (teleop_profiles.py)."""
-    from widowx_envs.teleop_profiles import check_profile, load_profile, resolve_path
+    from widowx_envs.teleop_profiles import check_profile, container_visible, load_profile, resolve_path
     full = resolve_path(path, conf_dir)
     if not os.path.exists(full):
-        return [f"teleop_profile {path!r} not found (looked at {full})"]
+        return [f"teleop_profile {path!r} not found (looked next to the conf and in its profiles/ folder)"]
+    if container_visible(full, conf_dir) is False:
+        return [f"teleop_profile {path!r} is outside widowx_envs/ ({os.path.realpath(full)}): collection runs "
+                "in the container, which cannot see it. Put it in configs/profiles/."]
     try:
         profile = load_profile(full)
     except ImportError:

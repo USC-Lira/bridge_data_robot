@@ -2,6 +2,24 @@
 
 Code for controlling Trossen WidowX robot arms.
 
+## Quick start (LiraLab)
+
+Everything you run is at the repo root; everything you edit is in `configs/`.
+
+| | |
+|---|---|
+| `python3 preflight.py --conf conf_test` | check the rig, fix what it can, start the robot container |
+| `python3 datacollection.py conf_test --preflight` | preflight, then collect data (drop `--preflight` if the container is already up) |
+| `python3 view_cameras.py` | watch the cameras live in your browser |
+| `python3 stop_container.py` | stop safely (sleep pose, motors off while you hold the arm) |
+| `configs/conf_*.py` | experiment confs: cameras, `action_mode`, teleop device, task/operator (copy one, e.g. `conf_jesse.py`) |
+| `configs/profiles/` | keyboard controls profiles, used with `teleop_profile="<name>"` |
+
+Confs are given by name (`conf_test`) or path. `configs/` is a shortcut to
+`widowx_envs/experiments/bridge_data_v2/`, where the files actually live (the
+robot container reads them there). Details: [`docs/notion/widowx.md`](docs/notion/widowx.md),
+[`docs/preflight.md`](docs/preflight.md).
+
 - `widowx_envs`: contains the `widowx_envs` Python package with all of the WidowX controller code.
 - `docker_compose.yml`: contains all of the docker-compose services that will be used to run the robot.
 
@@ -49,8 +67,8 @@ You will also need to update the device serial number in `widowx_envs/widowx_con
 Before every data collection session, run the preflight check from the repo root on the host:
 
 ```bash
-python3 widowx_envs/widowx_envs/preflight/preflight.py \
-    --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+python3 preflight.py \
+    --conf configs/conf_jesse.py
 ```
 
 If the host side is healthy it also starts the `robonet` container for you (in the background, with its output in a new terminal window), waits for the arm and cameras, and then runs the container checks; `python3 stop_container.py` stops it safely again. It verifies the host side (arm serial link, USB camera enumeration, `usb_connector_chart.yml` - which it regenerates on every run with `./generate_usb_config.sh`, pass `--no-generate` to keep a hand-edited one -, the VR headset's adb state, docker, the dataset directory) and then runs the ROS-side checks inside the `robonet` container (arm driver, camera topics, live frames, and that the experiment config you passed only references topics that are actually publishing). It exits non-zero if the session would go wrong, and every failure prints the command that fixes it.
@@ -59,11 +77,11 @@ Use `--scope host` before the container is up, and `--list` to see all checks. S
 
 ## Data collection
 
-No VR headset? Set `teleop="keyboard"` in the conf (see `widowx_envs/experiments/bridge_data_v2/conf_keyboard_example.py`) and drive the arm from the collection terminal; key layouts are customisable with a controls profile (`keyboard_profile_example.yaml`).
+No VR headset? Set `teleop="keyboard"` in the conf (see `configs/conf_keyboard_example.py`) and drive the arm from the collection terminal; key layouts are customisable with a controls profile (`keyboard_profile_example.yaml`).
 
 To watch the cameras live: `python3 view_cameras.py` opens a page in your browser with every camera topic, its resolution and frame rate (depth in false colour). It needs the `robonet` container running and does not run during data collection unless you add `--during-collection`; `Ctrl+C` stops it.
 
-The quickest way: `python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py --preflight` runs preflight, starts the container if needed, asks you to confirm the headset is ready, and starts collection. Without `--preflight` it skips the checks and collects straight away, which needs the container to be running already (e.g. from an earlier preflight). `python3 stop_container.py` stops the container afterwards. The manual steps follow.
+The quickest way: `python3 datacollection.py configs/conf_jesse.py --preflight` runs preflight, starts the container if needed, asks you to confirm the headset is ready, and starts collection. Without `--preflight` it skips the checks and collects straight away, which needs the container to be running already (e.g. from an earlier preflight). `python3 stop_container.py` stops the container afterwards. The manual steps follow.
 
 First, make sure the `robonet-base` container is running using the above command. Then, run the following commands:
 
@@ -74,7 +92,7 @@ Collected data is written to `/datasets` on the host (`$DATA` in the container, 
 docker compose exec robonet bash
 
 # start the data collection script
-python widowx_envs/widowx_envs/run_data_collection.py widowx_envs/experiments/bridge_data_v2/conf.py
+python widowx_envs/widowx_envs/run_data_collection.py configs/conf.py
 ```
 
 You can specify a different directory to save the data in `docker-compose.yml`.

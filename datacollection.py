@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Start a data collection session.
 
-    python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py
-    python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py --preflight
+    python3 datacollection.py configs/conf_jesse.py
+    python3 datacollection.py configs/conf_jesse.py --preflight
 
 By default it expects the robonet container to be running already (started by
 an earlier preflight run) and goes straight to collecting:
@@ -182,7 +182,7 @@ def collection_command(conf_host_path: str, config) -> list:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("conf", help="experiment config, e.g. widowx_envs/experiments/bridge_data_v2/conf_jesse.py")
+    p.add_argument("conf", help="experiment config, e.g. configs/conf_jesse.py")
     p.add_argument("--config", help="preflight config (.yaml/.json), if your rig differs from the defaults")
     p.add_argument("--controls", action="store_true", help="only print the VR controls and exit")
     p.add_argument("--preflight", action="store_true",
@@ -192,12 +192,13 @@ def main() -> int:
                    help="do not ask whether to start collecting (the headset confirmation is still asked)")
     if "--controls" in sys.argv[1:]:
         rest = [a for a in sys.argv[1:] if a != "--controls" and not a.startswith("-")]
-        print(controls_card(rest[0] if rest else None))
+        print(controls_card(preflight.resolve_conf(rest[0], REPO_ROOT) if rest else None))
         return 0
     args, passthrough = p.parse_known_args()
 
+    args.conf = preflight.resolve_conf(args.conf, REPO_ROOT)  # "conf_test" -> configs/conf_test.py
     if not os.path.exists(args.conf):
-        print(f"{args.conf} does not exist.")
+        print(f"{args.conf} not found: give a path, or a conf name from configs/ (e.g. conf_test).")
         return 2
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("datacollection.py needs a terminal: collection is interactive.")

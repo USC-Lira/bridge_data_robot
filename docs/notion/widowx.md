@@ -45,8 +45,8 @@ Run before every session, from the host, in the repo root:
 
 ```bash
 cd ~/bridge_data_robot
-python3 widowx_envs/widowx_envs/preflight/preflight.py \
-    --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+python3 preflight.py \
+    --conf configs/conf_jesse.py
 ```
 
 It checks cabling, USB enumeration, the camera connector chart, the Quest's adb
@@ -77,9 +77,9 @@ Details and how to add checks: [`docs/preflight.md`](https://github.com/USC-Lira
 ```bash
 cd ~/bridge_data_robot
 # first session of the day: check the rig and start the container too
-python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py --preflight
+python3 datacollection.py configs/conf_jesse.py --preflight
 # container already running (e.g. the next session): collect straight away
-python3 datacollection.py widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+python3 datacollection.py configs/conf_jesse.py
 ```
 
 With `--preflight` it first runs preflight with that conf (which starts the
@@ -96,8 +96,8 @@ windows below are what it does for you.
 
 ```bash
 cd ~/bridge_data_robot
-python3 widowx_envs/widowx_envs/preflight/preflight.py \
-    --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+python3 preflight.py \
+    --conf configs/conf_jesse.py
 ```
 
 Preflight regenerates `usb_connector_chart.yml`, checks the rig, starts the
@@ -138,11 +138,11 @@ rostopic echo /D435/color/image_raw --noarr
 cd ~/bridge_data_robot
 docker compose exec robonet bash
 python widowx_envs/widowx_envs/run_data_collection.py \
-    widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+    configs/conf_jesse.py
 ```
 
 Use your own config file — there are examples in
-`widowx_envs/experiments/bridge_data_v2/`. **Copy one to
+`configs/`. **Copy one to
 `conf_<yourname>.py`; do not edit `conf.py`.**
 
 #### The config file

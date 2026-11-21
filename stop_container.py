@@ -18,7 +18,7 @@ the arm drops the next time a driver starts. So this script
 
 Start it again with preflight, which also re-checks everything:
 
-    python3 widowx_envs/widowx_envs/preflight/preflight.py --conf <your conf_*.py>
+    python3 preflight.py --conf <your conf_*.py>
 """
 
 import argparse

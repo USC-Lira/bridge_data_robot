@@ -61,7 +61,7 @@ def main() -> int:
     config = PreflightConfig.load(args.config)
     if not session.container_running(REPO_ROOT, config):
         print(f"The {config.compose_service} container is not running. Start it first, e.g.:\n"
-              "  python3 widowx_envs/widowx_envs/preflight/preflight.py --conf <your conf_*.py>")
+              "  python3 preflight.py --conf <your conf_*.py>")
         return 2
 
     viewer_args = ["--port", str(args.port)]

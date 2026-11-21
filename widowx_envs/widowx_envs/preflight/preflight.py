@@ -4,7 +4,7 @@
 Run this from the repo root on the robot desktop *before* every data
 collection session::
 
-    python3 widowx_envs/widowx_envs/preflight/preflight.py
+    python3 preflight.py
 
 It verifies the host side (cabling, USB enumeration, the camera connector
 chart, the VR headset, docker, the dataset directory) and then hops into the
@@ -17,7 +17,7 @@ blocking failure, 2 = preflight itself could not run.
 Common invocations::
 
     # full check, and validate the exact experiment config you are about to use
-    python3 .../preflight.py --conf widowx_envs/experiments/bridge_data_v2/conf_jesse.py
+    python3 .../preflight.py --conf configs/conf_jesse.py
 
     # host only (e.g. before you have started the robonet container)
     python3 .../preflight.py --scope host
@@ -82,12 +82,36 @@ def find_repo_root(start: Optional[str] = None) -> str:
 
 
 def to_container_path(host_path: str, repo_root: str) -> str:
-    """Translate a host path under <repo>/widowx_envs to its container path."""
-    abs_path = os.path.abspath(host_path)
-    prefix = os.path.join(repo_root, "widowx_envs")
-    if abs_path.startswith(prefix):
+    """Translate a host path under <repo>/widowx_envs to its container path.
+
+    Symlinks are resolved first, so <repo>/configs/conf_x.py (configs is a
+    link to widowx_envs/experiments/bridge_data_v2) maps correctly.
+    """
+    abs_path = os.path.realpath(host_path)
+    prefix = os.path.join(os.path.realpath(repo_root), "widowx_envs")
+    if abs_path.startswith(prefix + os.sep):
         return CONTAINER_WIDOWX_ENVS + abs_path[len(prefix):]
     return abs_path
+
+
+CONFIGS_DIR = "configs"  # <repo>/configs -> widowx_envs/experiments/bridge_data_v2
+
+
+def resolve_conf(name: str, repo_root: str) -> str:
+    """An experiment conf given as a path, or by name from <repo>/configs.
+
+    "conf_test", "conf_test.py" and "configs/conf_test.py" all work, as does
+    the full widowx_envs/experiments/... path. Returns the real path (symlinks
+    resolved) if found, else ``name`` unchanged so the caller reports it.
+    """
+    candidates = [name]
+    if not os.path.isabs(name):
+        configs = os.path.join(repo_root, CONFIGS_DIR)
+        candidates += [os.path.join(configs, name), os.path.join(configs, name + ".py")]
+    for c in candidates:
+        if os.path.isfile(c):
+            return os.path.realpath(c)
+    return name
 
 
 # --------------------------------------------------------------------------- #
@@ -228,6 +252,8 @@ def main(argv=None) -> int:
         return 0
 
     repo_root = args.repo_root or find_repo_root()
+    if args.conf and not in_container():
+        args.conf = resolve_conf(args.conf, repo_root)
     interactive = (
         not args.non_interactive
         and args.json != "-"
