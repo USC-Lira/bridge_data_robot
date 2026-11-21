@@ -7,9 +7,9 @@ the arm drops the next time a driver starts. So this script
   1. moves the arm to its sleep pose (go_sleep inside the container); it gives
      up after 3 arm driver read errors, i.e. when the motors do not respond,
   2. asks you to confirm you are holding the arm,
-  3. switches the motors' torque off, so the arm goes limp in your hands
-     (if the link to the motors is broken it cannot: then switch the arm's
-     power off and on while holding it),
+  3. switches the motors' torque off, so the arm goes limp in your hands; if
+     the link to the motors is broken it cannot, and asks you instead to unplug
+     the arm's power supply cable while holding it,
   4. stops and removes the container.
 
     python3 stop_container.py            # from the repo root

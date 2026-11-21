@@ -285,14 +285,37 @@ def hold_arm_warning() -> str:
     )
 
 
+UNPLUG_INSTRUCTIONS = (
+    "The arm's motors cannot be reached, so they cannot be switched off from here and the\n"
+    "arm stays stiff. HOLD THE ARM and UNPLUG ITS POWER SUPPLY CABLE: the motors go limp\n"
+    "and you lower it. (Plug it back in before the next session.)"
+)
+
+
+def _wait_for_unplug() -> None:
+    print(UNPLUG_INSTRUCTIONS, flush=True)
+    if sys.stdin.isatty():
+        try:
+            input("Press Enter once the arm's power cable is unplugged. ")
+        except EOFError:
+            pass
+
+
 def release_and_stop(repo_root: str, config) -> bool:
-    """Release the motors (the operator is holding the arm), then stop the container."""
-    print("Switching the arm's motors off...", flush=True)
-    if release_motors(repo_root, config):
-        print("Motors off: the arm is free (lower it gently if you are holding it).", flush=True)
+    """Release the motors (the operator is holding the arm), then stop the container.
+
+    With a broken link to the motors (arm driver read errors right now) the
+    torque-off command cannot reach them; the operator unplugs the arm's power
+    supply instead, while holding it.
+    """
+    if arm_errors_since(repo_root, config, 5) >= GO_SLEEP_MAX_ARM_ERRORS:
+        _wait_for_unplug()
     else:
-        print("Could not switch the motors off (no working link to them). The arm stays stiff:\n"
-              "keep holding it and switch the arm's power off, then on again, to release it.", flush=True)
+        print("Switching the arm's motors off...", flush=True)
+        if release_motors(repo_root, config):
+            print("Motors off: the arm is free (lower it gently if you are holding it).", flush=True)
+        else:
+            _wait_for_unplug()
     return stop(repo_root, config)
 
 

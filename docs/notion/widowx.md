@@ -275,9 +275,9 @@ Inside the container under `$DATA` (`/home/robonet/trainingdata`), which is
    the arm, **switches the motors off** (the arm goes limp in your hands, or
    rests in its sleep pose), then stops the container. If the arm's motors do
    not respond (3 read errors), it skips the sleep pose instead of waiting. If
-   the link to the motors is broken it cannot switch them off: keep holding
-   the arm and switch its power off and on to release it, or it drops the next
-   time the container starts.
+   the link to the motors is broken it cannot switch them off, and asks you to
+   **unplug the arm's power supply cable while holding it** (the motors then go
+   limp); it waits for you before stopping the container.
 3. Power the arm off.
 4. Put the Quest on its charger.
 
